@@ -1,0 +1,9 @@
+fastapi==0.120.*
+uvicorn[standard]==0.38.*
+pydantic-settings==2.11.*
+SQLAlchemy==2.0.*
+psycopg[binary]==3.2.*
+
+# Testing
+pytest==8.4.*
+httpx==0.28.*
