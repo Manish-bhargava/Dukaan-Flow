@@ -6,14 +6,14 @@ built for a distributor in Jabalpur. See `PROJECT.md` and `docs/` for requiremen
 | Part | Stack |
 |---|---|
 | Frontend (`frontend/`) | React, TypeScript, Vite, Tailwind CSS |
-| Backend (`backend/`) | Python 3.13, FastAPI, Pydantic, SQLAlchemy |
-| Database | PostgreSQL (configured, not yet used) |
+| Backend (`backend/`) | Python 3.13, FastAPI, Pydantic, SQLAlchemy, Alembic |
+| Database | PostgreSQL |
 
 ## Prerequisites
 
 - Python 3.13 (3.12+ should work)
 - Node.js 20.19+ / 22.12+ and npm
-- PostgreSQL (needed from Milestone 2 onwards)
+- PostgreSQL 14+ with an empty database for DukaanFlow
 
 ## Backend
 
@@ -22,9 +22,14 @@ cd backend
 python3.13 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env               # set DATABASE_URL
+alembic upgrade head               # create tables
+python -m seed.run_seed            # load demo data
 uvicorn app.main:app --reload --port 8000
 ```
+
+Verify the database: `curl http://localhost:8000/api/v1/dev/db-status` (development only).
+See `backend/README.md` for all database commands and dev endpoints.
 
 Check: `curl http://localhost:8000/api/v1/health`
 
@@ -53,7 +58,8 @@ Other scripts: `npm run lint` (oxlint), `npm run build` (type-check + production
 |---|---|---|
 | `backend/.env` | `APP_NAME`, `ENVIRONMENT`, `DEBUG` | App metadata / debug mode |
 | `backend/.env` | `CORS_ORIGINS` | Comma-separated allowed frontend origins |
-| `backend/.env` | `DATABASE_URL` | PostgreSQL URL (`postgresql+psycopg://…`) |
+| `backend/.env` | `DATABASE_URL` | PostgreSQL URL (`postgresql+psycopg://…`); percent-encode password special characters |
+| `backend/.env` | `TEST_DATABASE_URL` | Optional; database wiped and rebuilt by `pytest` (default `<db>_test`) |
 | `frontend/.env` | `VITE_API_BASE_URL` | Backend base URL including `/api/v1` |
 
 Never commit `.env` files; only the `.env.example` templates are tracked.

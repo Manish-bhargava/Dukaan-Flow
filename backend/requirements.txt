@@ -3,6 +3,7 @@ uvicorn[standard]==0.38.*
 pydantic-settings==2.11.*
 SQLAlchemy==2.0.*
 psycopg[binary]==3.2.*
+alembic==1.17.*
 
 # Testing
 pytest==8.4.*

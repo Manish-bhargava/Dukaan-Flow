@@ -156,6 +156,8 @@ V1 supports:
 
 Do not apply multiple schemes together unless explicitly configured.
 
+Implementation note: `free_quantity` and `discount_percentage` are NOT NULL; the benefit a scheme type does not use is stored as 0 (a CHECK constraint enforces this). FREE_GOODS gives `free_quantity` for every full `min_quantity` ordered (buy 10 get 1: 25 cases → 2 free). If more than one active scheme qualifies for the same order line, pricing is refused with `SCHEME_CONFLICT` instead of combining or choosing one.
+
 ### 3.8 retailer_aliases
 
 Stores alternative product names used by individual retailers.
@@ -211,6 +213,8 @@ Stores individual items extracted from an AI request.
 | created_at | TIMESTAMPTZ | Creation time |
 
 AI extraction is not an order. A user must review and confirm the matched products and quantities.
+
+Approved deviation: `quantity` and `unit` are nullable. NULL means the retailer's message did not state it (e.g. "5 biscuit" — cases or packets?); such items are stored with `requires_clarification = true` and the unit is never guessed. The confirming user must state the quantity and unit explicitly.
 
 ### 3.11 orders
 

@@ -8,9 +8,12 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 
 def get_db() -> Generator[Session, None, None]:
-    """Yield a database session for a single request and always close it afterwards."""
+    """Yield a session for one request; roll back on error and always close it afterwards."""
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

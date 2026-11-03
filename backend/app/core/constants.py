@@ -1,3 +1,6 @@
+from enum import StrEnum
+
+
 class ErrorCode:
     """Error codes returned in the standard error response (see docs/API_DESIGN.MD)."""
 
@@ -7,4 +10,72 @@ class ErrorCode:
     RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
     METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
     HTTP_ERROR = "HTTP_ERROR"
+    PRODUCT_NOT_FOUND = "PRODUCT_NOT_FOUND"
+    AMBIGUOUS_PRODUCT = "AMBIGUOUS_PRODUCT"
+    PRICE_NOT_AVAILABLE = "PRICE_NOT_AVAILABLE"
+    SCHEME_CONFLICT = "SCHEME_CONFLICT"
+    INSUFFICIENT_STOCK = "INSUFFICIENT_STOCK"
+    CREDIT_LIMIT_EXCEEDED = "CREDIT_LIMIT_EXCEEDED"
+    INVALID_ORDER_STATUS = "INVALID_ORDER_STATUS"
+    INVALID_EXTRACTION_STATUS = "INVALID_EXTRACTION_STATUS"
+    DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
     INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
+
+
+# Allowed values for VARCHAR status/type columns. Enforced in the database by CHECK constraints.
+
+
+class UserRole(StrEnum):
+    RETAILER = "RETAILER"
+    SALESMAN = "SALESMAN"
+    ORDER_DESK = "ORDER_DESK"
+    ADMIN = "ADMIN"
+
+
+class PriceBasis(StrEnum):
+    CASE = "CASE"
+    PIECE = "PIECE"
+
+
+class SchemeType(StrEnum):
+    FREE_GOODS = "FREE_GOODS"
+    SLAB_DISCOUNT = "SLAB_DISCOUNT"
+
+
+class ExtractionStatus(StrEnum):
+    PENDING = "PENDING"
+    REVIEWED = "REVIEWED"
+    CONFIRMED = "CONFIRMED"
+    FAILED = "FAILED"
+
+
+class OrderSource(StrEnum):
+    MANUAL = "MANUAL"
+    AI = "AI"
+    SALESMAN = "SALESMAN"
+
+
+class OrderStatus(StrEnum):
+    PENDING = "PENDING"
+    CREDIT_HOLD = "CREDIT_HOLD"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class StockMovementType(StrEnum):
+    ORDER_DEDUCTION = "ORDER_DEDUCTION"
+    RESTOCK = "RESTOCK"
+    ADJUSTMENT = "ADJUSTMENT"
+
+
+class CreditTransactionType(StrEnum):
+    ORDER_DEBIT = "ORDER_DEBIT"
+    PAYMENT_CREDIT = "PAYMENT_CREDIT"
+    ADJUSTMENT = "ADJUSTMENT"
+
+
+# Roles allowed to review, correct, approve and reject orders.
+ORDER_DESK_ROLES = (UserRole.ORDER_DESK, UserRole.ADMIN)
+
+# Orders can only be corrected, approved or rejected while in one of these statuses.
+OPEN_ORDER_STATUSES = (OrderStatus.PENDING, OrderStatus.CREDIT_HOLD)

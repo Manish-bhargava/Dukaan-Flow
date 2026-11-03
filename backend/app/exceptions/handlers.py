@@ -4,6 +4,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.constants import ErrorCode
@@ -49,6 +51,15 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError) 
     )
 
 
+async def database_unavailable_handler(_: Request, exc: Exception) -> JSONResponse:
+    # Connection refused, authentication failure, server gone away or pool exhausted.
+    logger.error("Database unavailable: %s", exc)
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=error_response("Database is unavailable", ErrorCode.DATABASE_UNAVAILABLE),
+    )
+
+
 async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled error", exc_info=exc)
     return JSONResponse(
@@ -63,4 +74,6 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppException, app_exception_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(OperationalError, database_unavailable_handler)
+    app.add_exception_handler(PoolTimeoutError, database_unavailable_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

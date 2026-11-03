@@ -52,6 +52,8 @@ AI:
 
 Backend (from `backend/`, venv at `backend/.venv`, Python 3.13):
 - Run: `.venv/bin/uvicorn app.main:app --reload --port 8000`
+- Migrate: `.venv/bin/alembic upgrade head`; new migration: `.venv/bin/alembic revision --autogenerate -m "..."` (review it; `alembic check` verifies models match)
+- Seed demo data (idempotent): `.venv/bin/python -m seed.run_seed` (master data from `seed/demo_data.py`, then order/AI activity from `seed/demo_activity.py` created via the services in one transaction)
 - Test all: `.venv/bin/python -m pytest`
 - Single test: `.venv/bin/python -m pytest tests/test_health.py::test_health_returns_standard_success_response`
 
@@ -67,6 +69,14 @@ Frontend (from `frontend/`):
 - Raise `AppException(message, error_code, status_code, details)` for expected errors; `app/exceptions/handlers.py` formats them. Error codes live in `app/core/constants.py`.
 - Settings come from env vars / `backend/.env` via `app/core/config.py` (`settings`).
 - DB session dependency: `DbSession` in `app/core/dependencies.py`; models inherit `app.database.base.Base`.
+- Models live in `app/models/<domain>.py` and must be imported in `app/models/__init__.py` (Alembic reads `Base.metadata`). Status/role/type columns are VARCHAR + CHECK constraints built from the StrEnums in `app/core/constants.py`. `users` ↔ `retailers` reference each other, so that FK is added separately in migrations.
+- `stock_movements.quantity` and `credit_ledger.amount` are signed (positive = adds stock / increases outstanding).
+- Tests: DB tests use a separate `<db>_test` database that `tests/conftest.py` rebuilds with Alembic and seeds each run; use the `db_session` / `client` fixtures. Seed records have deterministic IDs via `seed.run_seed.seed_id(...)`.
+- `app/modules/dev/` is temporary, unauthenticated, and mounted only when `ENVIRONMENT=development`.
+- Order workflow lives in services that take the acting `User` and enforce access via `app/core/permissions.py` (RETAILER: own shop; SALESMAN: assigned shops; ORDER_DESK/ADMIN: all). Services commit on success and roll back on failure. Modules: `pricing` (pure `calculate_line`), `orders` (create, `correct_order_item`, `approve_order`, `reject_order`), `ai_orders` (`record_extraction`, `confirm_extraction`), `inventory`, `retailers` (credit). No HTTP endpoints for these yet — they are added after auth (Milestone 2 Part 2).
+- `approve_order` follows DATABASE_DESIGN.MD §7 in one transaction: locks order, inventory rows (sorted by product_id) and credit account with `SELECT … FOR UPDATE` + `populate_existing`. Over-limit orders sit in CREDIT_HOLD; Order Desk may approve only with `credit_override_reason`, which is stored in the ledger entry. Credit is debited (ORDER_DEBIT, full grand total) at approval.
+- Order quantities are in the product's `order_unit`; any other unit is refused, never converted. Corrections re-price at `order.created_at`. `orders.subtotal` = Σ(taxable_amount + discount_amount).
+- Workflow tests use the `tx` fixture (savepoint session rolled back after each test); `tests/test_concurrency.py` commits for real across threads and restores the data it changed.
 
 ## Backend Architecture
 
