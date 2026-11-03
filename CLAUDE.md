@@ -38,7 +38,7 @@ Backend:
 - SQLAlchemy
 - Pydantic
 - Alembic
-- Redis (Upstash)
+- Redis (Upstash) — OTP storage only
 
 Database:
 - PostgreSQL
@@ -73,6 +73,9 @@ Frontend (from `frontend/`):
 - `stock_movements.quantity` and `credit_ledger.amount` are signed (positive = adds stock / increases outstanding).
 - Tests: DB tests use a separate `<db>_test` database that `tests/conftest.py` rebuilds with Alembic and seeds each run; use the `db_session` / `client` fixtures. Seed records have deterministic IDs via `seed.run_seed.seed_id(...)`.
 - `app/modules/dev/` is temporary, unauthenticated, and mounted only when `ENVIRONMENT=development`.
+- Auth: protect routes with `CurrentUser` or `Depends(require_roles(...))` from `app/core/dependencies.py`; the dependency reloads the user from PostgreSQL (active + role must match the token). Pass that user to services, which enforce resource ownership via `app/core/permissions.py`. One token format from `create_access_token` (`app/core/security.py`).
+- Auth state lives only in Upstash Redis (`app/modules/auth/auth_store.py`, one atomic Lua script per operation), keyed by the 10-digit phone: `otp:`, `otp_attempts:`, `otp_cooldown:`, `otp_requests:`, `login_attempts:`. Rate limits run for every number before any user lookup, and `send-otp` returns the same generic response for unknown/non-retailer numbers; the OTP is emailed to the retailer's `users.email`, and if there is no email or Brevo rejects it, no usable OTP is left and 503 `OTP_DELIVERY_FAILED` is returned. OTP login is RETAILER-only; password login is SALESMAN/ORDER_DESK/ADMIN-only. Redis down → 503 (fail closed). The `otp_verifications` table is unused; `users.email` (unique, lower case) is where retailer OTPs are sent.
+- OTP email goes through `send_otp_email` (async) → `auth/mailer.py`: `brevo` (Brevo transactional email `POST /v3/smtp/email` via `httpx.AsyncClient`) or `mock` (dev-only; config refuses mock outside development). The sync service awaits it with `anyio.from_thread.run`, so it must be called from a request (worker thread). Auth logs each step (generated, stored, emailed, verified) and never the OTP, API key or JWT; emails are masked. Tests replace Upstash with fakeredis (`FakeUpstash` in `tests/test_auth.py`), capture email by monkeypatching `auth.service.send_otp_email` with an async function, and fake Brevo with `httpx.MockTransport` (`tests/test_email.py`). An autouse fixture in `tests/conftest.py` forces `EMAIL_PROVIDER=mock` and makes any un-faked Brevo call fail, so tests never depend on `backend/.env` or send real email; build `Settings(_env_file=None, ...)` in tests.
 - Order workflow lives in services that take the acting `User` and enforce access via `app/core/permissions.py` (RETAILER: own shop; SALESMAN: assigned shops; ORDER_DESK/ADMIN: all). Services commit on success and roll back on failure. Modules: `pricing` (pure `calculate_line`), `orders` (create, `correct_order_item`, `approve_order`, `reject_order`), `ai_orders` (`record_extraction`, `confirm_extraction`), `inventory`, `retailers` (credit). No HTTP endpoints for these yet — they are added after auth (Milestone 2 Part 2).
 - `approve_order` follows DATABASE_DESIGN.MD §7 in one transaction: locks order, inventory rows (sorted by product_id) and credit account with `SELECT … FOR UPDATE` + `populate_existing`. Over-limit orders sit in CREDIT_HOLD; Order Desk may approve only with `credit_override_reason`, which is stored in the ledger entry. Credit is debited (ORDER_DEBIT, full grand total) at approval.
 - Order quantities are in the product's `order_unit`; any other unit is refused, never converted. Corrections re-price at `order.created_at`. `orders.subtotal` = Σ(taxable_amount + discount_amount).

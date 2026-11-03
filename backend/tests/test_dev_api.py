@@ -93,7 +93,10 @@ def test_invalid_retailer_id_returns_validation_error(client):
 
 
 def test_dev_endpoints_are_not_mounted_outside_development():
-    production_app = create_app(Settings(ENVIRONMENT="production"))
+    production_app = create_app(Settings(_env_file=None,
+        ENVIRONMENT="production", JWT_SECRET_KEY="p" * 48,
+        EMAIL_PROVIDER="brevo", BREVO_API_KEY="k", BREVO_SENDER_EMAIL="login@example.com",
+    ))
     response = TestClient(production_app).get("/api/v1/dev/db-status")
     assert response.status_code == 404
 

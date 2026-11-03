@@ -5,6 +5,15 @@ class ErrorCode:
     """Error codes returned in the standard error response (see docs/API_DESIGN.MD)."""
 
     UNAUTHORIZED = "UNAUTHORIZED"
+    TOKEN_EXPIRED = "TOKEN_EXPIRED"
+    INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+    ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
+    INVALID_OTP = "INVALID_OTP"
+    OTP_EXPIRED = "OTP_EXPIRED"
+    OTP_ATTEMPTS_EXCEEDED = "OTP_ATTEMPTS_EXCEEDED"
+    AUTH_SERVICE_UNAVAILABLE = "AUTH_SERVICE_UNAVAILABLE"
+    OTP_DELIVERY_FAILED = "OTP_DELIVERY_FAILED"
+    RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
     FORBIDDEN = "FORBIDDEN"
     VALIDATION_ERROR = "VALIDATION_ERROR"
     RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
@@ -79,3 +88,7 @@ ORDER_DESK_ROLES = (UserRole.ORDER_DESK, UserRole.ADMIN)
 
 # Orders can only be corrected, approved or rejected while in one of these statuses.
 OPEN_ORDER_STATUSES = (OrderStatus.PENDING, OrderStatus.CREDIT_HOLD)
+
+# Login methods by role: retailers use phone + OTP only; internal users use phone + password only.
+OTP_LOGIN_ROLES = (UserRole.RETAILER,)
+PASSWORD_LOGIN_ROLES = (UserRole.SALESMAN, UserRole.ORDER_DESK, UserRole.ADMIN)

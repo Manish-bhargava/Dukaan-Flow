@@ -89,3 +89,19 @@ def test_price_for_unknown_retailer_violates_foreign_key(db_session):
 
 def test_duplicate_category_name_is_rejected(db_session):
     _assert_rejected(db_session, Category(name="Biscuits"))
+
+
+def test_user_email_must_be_unique(db_session):
+    _assert_rejected(db_session, User(
+        name="Copy", phone="9111111113", role="ADMIN", email="sharma.kirana@example.com"
+    ))
+
+
+def test_user_email_must_be_stored_normalized(db_session):
+    _assert_rejected(db_session, User(name="Caps", phone="9111111114", role="ADMIN", email="Caps@Example.com"))
+
+
+def test_user_email_is_optional(db_session):
+    db_session.add(User(name="No Email", phone="9111111115", role="ADMIN"))
+    db_session.flush()
+    db_session.rollback()

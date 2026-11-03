@@ -78,6 +78,26 @@ uvicorn app.main:app --reload --port 8000
 - Health check: http://localhost:8000/api/v1/health
 - OpenAPI docs: http://localhost:8000/docs
 
+### Authentication
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/auth/send-otp` | `{"phone"}`: emails an OTP to an active retailer's registered address (valid 120 s); same response for every number |
+| `POST /api/v1/auth/verify-otp` | `{"phone", "otp"}` → access token + user (5 attempts per OTP) |
+| `POST /api/v1/auth/login` | `{"phone", "password"}` → access token + user (salesman, order desk, admin) |
+| `GET /api/v1/auth/me` | Current user (`Authorization: Bearer <token>`) |
+
+- Both login methods need Upstash Redis (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`) for OTPs
+  and rate limits; without it they return 503 `AUTH_SERVICE_UNAVAILABLE`.
+- Limits per phone number: resend cooldown 60 s, 5 OTP requests per 15 min, 5 password attempts per 15 min.
+- Email: `EMAIL_PROVIDER=mock` (development only) prints the OTP in the backend console as
+  `WARNING  dukaanflow.email: [DEV MOCK EMAIL] OTP for … is …`. `EMAIL_PROVIDER=brevo` sends a real
+  email to the retailer's `users.email` and needs `BREVO_API_KEY` and `BREVO_SENDER_EMAIL` (a sender
+  verified in Brevo). A retailer without an email gets 503 `OTP_DELIVERY_FAILED`. Production must use
+  `brevo`. Restart the server after changing `.env`.
+- Demo retailers: 9000000101 (Sharma), 9000000102 (Gupta). Internal demo users get a password from
+  `DEMO_STAFF_PASSWORD` when you run `python -m seed.run_seed`.
+
 ### Development-only endpoints
 
 Mounted only when `ENVIRONMENT=development`; they have no authentication.

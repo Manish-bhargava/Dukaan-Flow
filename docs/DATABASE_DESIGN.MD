@@ -38,6 +38,7 @@ Stores all platform users.
 | id | UUID | Primary key |
 | name | VARCHAR(150) | User name |
 | phone | VARCHAR(15) | Unique phone number |
+| email | VARCHAR(255), nullable | Unique, stored lower case; retailers receive their login OTP here (login itself uses the phone number) |
 | password_hash | VARCHAR(255) | Optional, if password login is added |
 | role | VARCHAR(30) | RETAILER, SALESMAN, ORDER_DESK, ADMIN |
 | retailer_id | UUID, nullable | Linked retailer for retailer accounts |
@@ -62,6 +63,8 @@ Stores OTP verification records.
 | created_at | TIMESTAMPTZ | Creation time |
 
 Never store plain-text OTPs. Expired OTPs must not be accepted.
+
+V1 status: not used. Retailer OTPs are sent by email and stored and verified only in Upstash Redis (see API_DESIGN.MD section 3); nothing is written to this table. It is kept for now and may be removed in a later migration.
 
 ### 3.3 retailers
 
@@ -372,6 +375,7 @@ Do not let retailers modify their own credit limit or outstanding balance.
 - All primary keys must be UUIDs.
 - Product SKU must be unique.
 - User phone number must be unique.
+- User email must be unique when present and stored normalized (lower case, trimmed).
 - Order number must be unique.
 - A retailer must not have duplicate normalized aliases.
 - Each product must have only one inventory row in V1.

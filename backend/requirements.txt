@@ -4,7 +4,11 @@ pydantic-settings==2.11.*
 SQLAlchemy==2.0.*
 psycopg[binary]==3.2.*
 alembic==1.17.*
+upstash-redis==1.9.*
+argon2-cffi==25.1.*
+PyJWT==2.15.*
+httpx==0.28.*
 
 # Testing
 pytest==8.4.*
-httpx==0.28.*
+fakeredis[lua]==2.40.*

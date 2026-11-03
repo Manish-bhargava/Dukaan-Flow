@@ -18,11 +18,14 @@ class User(Base):
         CheckConstraint(in_values("role", UserRole), name="role_valid"),
         # A retailer account must be linked to its retailer record.
         CheckConstraint("role <> 'RETAILER' OR retailer_id IS NOT NULL", name="retailer_link"),
+        # Emails are stored normalized (trimmed, lower case) so uniqueness is case-insensitive.
+        CheckConstraint("email IS NULL OR email = lower(btrim(email))", name="email_normalized"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()
     name: Mapped[str] = mapped_column(String(150))
     phone: Mapped[str] = mapped_column(String(15), unique=True)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True)  # retailer OTP login
     password_hash: Mapped[str | None] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(30), index=True)
     retailer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("retailers.id"), index=True)

@@ -126,3 +126,24 @@ def tx_client(tx: Session) -> Generator[TestClient, None, None]:
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _never_send_real_email(monkeypatch):
+    """Tests must not depend on backend/.env: force the mock email provider with no Brevo
+    credentials, and make any un-faked HTTP call to Brevo fail instead of sending email.
+    Tests that exercise Brevo replace mailer._http_client with httpx.MockTransport."""
+    import httpx
+
+    from app.core.config import settings as app_settings
+    from app.modules.auth import mailer as mailer_module
+
+    monkeypatch.setattr(app_settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(app_settings, "EMAIL_PROVIDER", "mock")
+    monkeypatch.setattr(app_settings, "BREVO_API_KEY", None)
+    monkeypatch.setattr(app_settings, "BREVO_SENDER_EMAIL", None)
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"Test tried to call a real external API: {request.url}")
+
+    monkeypatch.setattr(mailer_module, "_http_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(refuse)))

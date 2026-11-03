@@ -11,7 +11,7 @@ import uuid
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -86,10 +86,11 @@ def run_seed(session: Session) -> dict[str, tuple[int, int]]:
             "id": seed_id("user", key),
             "name": name,
             "phone": phone,
+            "email": email,
             "role": "RETAILER",
             "retailer_id": retailer_ids[retailer_key],
         }
-        for key, (name, phone, retailer_key) in d.RETAILER_USERS.items()
+        for key, (name, phone, email, retailer_key) in d.RETAILER_USERS.items()
     ]))
     plan.append((Category, [{"id": seed_id("category", n), "name": n} for n in d.CATEGORIES]))
     plan.append((Product, [
@@ -209,6 +210,10 @@ def run_seed(session: Session) -> dict[str, tuple[int, int]]:
     for model, rows in plan:
         table = model.__tablename__
         inserted[table] = inserted.get(table, 0) + _insert(session, model, rows)
+    for key, (_name, _phone, email, _retailer) in d.RETAILER_USERS.items():
+        session.execute(
+            update(User).where(User.id == seed_id("user", key), User.email.is_(None)).values(email=email)
+        )
     session.commit()
 
     return {
@@ -218,6 +223,21 @@ def run_seed(session: Session) -> dict[str, tuple[int, int]]:
             for model in dict.fromkeys(m for m, _ in plan)
         )
     }
+
+
+def set_demo_staff_passwords(session: Session, password: str) -> int:
+    """Give internal demo users a password (only those without one). Returns users updated.
+    The password comes from DEMO_STAFF_PASSWORD; it is never stored in seed files."""
+    from app.core.security import hash_password
+
+    staff_ids = [seed_id("user", key) for key in d.STAFF_USERS]
+    result = session.execute(
+        update(User)
+        .where(User.id.in_(staff_ids), User.password_hash.is_(None))
+        .values(password_hash=hash_password(password))
+    )
+    session.commit()
+    return result.rowcount
 
 
 def main() -> None:
@@ -231,6 +251,15 @@ def main() -> None:
     print(f"{'table':<18}{'inserted':>10}{'total':>8}")
     for table, (inserted, total) in summary.items():
         print(f"{table:<18}{inserted:>10}{total:>8}")
+
+    from app.core.config import settings
+
+    if settings.is_development and settings.DEMO_STAFF_PASSWORD:
+        with SessionLocal() as session:
+            updated = set_demo_staff_passwords(session, settings.DEMO_STAFF_PASSWORD)
+        print(f"\ninternal demo users given DEMO_STAFF_PASSWORD: {updated} (existing passwords kept)")
+    else:
+        print("\nDEMO_STAFF_PASSWORD not set: internal demo users have no password yet")
 
     # Demo orders/AI activity in ONE transaction: the services' commits become savepoints,
     # so either all of it is created or none of it is.

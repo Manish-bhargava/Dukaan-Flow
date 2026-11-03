@@ -91,10 +91,11 @@ RETAILERS = {
 }
 RETAILER_CITY = "Jabalpur"
 
-# key -> (name, phone, retailer key)
+# key -> (name, phone, email, retailer key). Retailers sign in with phone + OTP; the OTP
+# is emailed to this address.
 RETAILER_USERS = {
-    "retailer_sharma": ("Ramesh Sharma", "9000000101", "sharma"),
-    "retailer_gupta": ("Mahesh Gupta", "9000000102", "gupta"),
+    "retailer_sharma": ("Ramesh Sharma", "9000000101", "sharma.kirana@example.com", "sharma"),
+    "retailer_gupta": ("Mahesh Gupta", "9000000102", "gupta.general@example.com", "gupta"),
 }
 
 CATEGORIES = ["Biscuits", "Home Care", "Tea", "Noodles"]

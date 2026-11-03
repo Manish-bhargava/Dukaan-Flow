@@ -118,6 +118,7 @@ class UserOut(ORMOut):
     id: uuid.UUID
     name: str
     phone: str
+    email: str | None
     role: str
     retailer_id: uuid.UUID | None
     is_active: bool
