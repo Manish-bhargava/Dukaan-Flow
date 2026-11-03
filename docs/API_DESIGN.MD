@@ -157,15 +157,35 @@ Return the authenticated user's profile and role.
 ## 4. Product Catalogue APIs
 
 ### GET `/products`
-Fetch the product catalogue available to the authenticated retailer.
+Fetch the product catalogue available to the authenticated retailer (RETAILER only in V1; other roles get `FORBIDDEN`, 403). Only active products in active categories that have a current dealer price for the retailer are listed.
 
 Query parameters:
-- `search`
+- `search` (name, brand or SKU, case-insensitive; max 100 chars)
 - `category_id`
-- `page`
-- `limit`
+- `page` (default 1)
+- `limit` (default 20, max 100)
 
-Return product details, retailer-specific price, available stock and applicable scheme.
+Response data:
+```json
+{
+  "items": [
+    {
+      "id": "uuid", "sku": "SKU-BS-075", "name": "Glucose Biscuit 75g", "brand": "Sunrise Foods",
+      "category": {"id": "uuid", "name": "Biscuits"},
+      "pack_size": "75g", "units_per_case": "96.000", "base_unit": "piece", "order_unit": "case",
+      "gst_rate": "5.00", "image_url": null,
+      "price": {"dealer_price": "7.94", "price_basis": "PIECE", "tax_inclusive": false, "case_price": "762.24"},
+      "stock_cases": "340.000", "in_stock": true,
+      "schemes": [{"id": "uuid", "scheme_type": "FREE_GOODS", "min_quantity": "10.000", "free_quantity": "1.000", "discount_percentage": "0.00"}]
+    }
+  ],
+  "page": 1, "limit": 20, "total": 10
+}
+```
+`case_price` is the dealer price for one order unit before GST and schemes, for display only; order totals are always calculated by the backend when an order is placed. `schemes` lists the schemes active now.
+
+### GET `/products/categories`
+Active categories (`[{"id", "name"}]`), for the catalogue filter. RETAILER only in V1.
 
 ### GET `/products/{product_id}`
 Fetch one product with its retailer-specific price, stock and scheme.

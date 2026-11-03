@@ -1,1 +1,75 @@
 @import 'tailwindcss';
+
+/* DukaanFlow palette: warm cream, leaf green, mango yellow. */
+@theme {
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-cream-50: #fffdf7;
+  --color-cream-100: #fbf6e9;
+  --color-cream-200: #f4ead2;
+  --color-cream-300: #e9dab4;
+
+  --color-leaf-50: #eef8f1;
+  --color-leaf-100: #d5eedd;
+  --color-leaf-200: #ade0bf;
+  --color-leaf-300: #7cca9a;
+  --color-leaf-400: #47ad70;
+  --color-leaf-500: #26904f;
+  --color-leaf-600: #1b7841;
+  --color-leaf-700: #176036;
+  --color-leaf-800: #154d2d;
+  --color-leaf-900: #113f26;
+  --color-leaf-950: #082415;
+
+  --color-mango-100: #fff3c4;
+  --color-mango-200: #ffe68a;
+  --color-mango-300: #ffd54d;
+  --color-mango-400: #fbc124;
+  --color-mango-500: #eea50b;
+  --color-mango-600: #c97f06;
+
+  --color-ink: #1d2b22;
+  --color-ink-soft: #4b5a50;
+
+  --animate-fade-up: fade-up 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-float: float 6s ease-in-out infinite;
+  --animate-float-slow: float 8s ease-in-out infinite;
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(18px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-cream-50 font-sans text-ink antialiased;
+}
+
+/* Scroll-reveal (see useReveal): hidden until the element enters the viewport. */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+}

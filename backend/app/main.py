@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import Settings, settings
 from app.exceptions.handlers import register_exception_handlers
 from app.modules.auth.router import router as auth_router
+from app.modules.products.router import router as products_router
 from app.utils.responses import success_response
 
 
@@ -37,6 +38,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     api_router = APIRouter(prefix=app_settings.API_V1_PREFIX)
     api_router.add_api_route("/health", health_check, methods=["GET"], tags=["health"])
     api_router.include_router(auth_router)
+    api_router.include_router(products_router)
 
     if app_settings.is_development:
         from app.modules.dev.router import router as dev_router
