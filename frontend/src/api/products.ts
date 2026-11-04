@@ -8,6 +8,7 @@ export interface Category {
 export interface Scheme {
   id: string
   scheme_type: 'FREE_GOODS' | 'SLAB_DISCOUNT'
+  description: string
   min_quantity: string
   free_quantity: string
   discount_percentage: string
@@ -25,7 +26,8 @@ export interface Product {
   base_unit: string
   order_unit: string
   gst_rate: string
-  image_url: string | null
+  image_url: string | null // large optimized image (Cloudinary), null: show placeholder
+  thumbnail_url: string | null
   price: { dealer_price: string; price_basis: 'PIECE' | 'CASE'; tax_inclusive: boolean; case_price: string }
   stock_cases: string
   in_stock: boolean
@@ -44,6 +46,14 @@ export const fetchCategories = (token: string, signal?: AbortSignal) =>
 
 export const fetchProducts = (
   token: string,
-  params: { search?: string; category_id?: string; page?: number; limit?: number },
+  params: { search?: string; category_id?: string; page?: number; limit?: number; retailer_id?: string; has_scheme?: boolean },
   signal?: AbortSignal,
-) => apiRequest<ProductPage>('/products', { token, params, signal })
+) =>
+  apiRequest<ProductPage>('/products', {
+    token,
+    params: { ...params, has_scheme: params.has_scheme ? 'true' : undefined },
+    signal,
+  })
+
+export const fetchProduct = (token: string, id: string, signal?: AbortSignal) =>
+  apiRequest<Product>(`/products/${id}`, { token, signal })

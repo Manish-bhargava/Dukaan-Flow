@@ -23,17 +23,19 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'PATCH'
   body?: unknown
   token?: string | null
-  params?: Record<string, string | number | undefined>
+  params?: Record<string, string | number | string[] | undefined>
   signal?: AbortSignal
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<ApiResponse<T>> {
   const url = new URL(`${API_BASE_URL}${path}`)
   for (const [key, value] of Object.entries(options.params ?? {})) {
-    if (value !== undefined && value !== '') url.searchParams.set(key, String(value))
+    for (const v of Array.isArray(value) ? value : [value]) {
+      if (v !== undefined && v !== '') url.searchParams.append(key, String(v))
+    }
   }
 
   const headers: Record<string, string> = { Accept: 'application/json' }
@@ -63,4 +65,27 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     )
   }
   return payload as ApiResponse<T>
+}
+
+/** Download a file (e.g. CSV) from an authenticated endpoint. */
+export async function apiDownload(
+  path: string,
+  token: string,
+  params: Record<string, string | undefined> = {},
+): Promise<{ blob: Blob; filename: string }> {
+  const url = new URL(`${API_BASE_URL}${path}`)
+  for (const [key, value] of Object.entries(params)) if (value) url.searchParams.set(key, value)
+  let response: Response
+  try {
+    response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  } catch {
+    throw new ApiError('Cannot reach the DukaanFlow server. Check your connection and try again.', 0, 'NETWORK_ERROR')
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new ApiError(payload?.message ?? `Download failed (HTTP ${response.status})`, response.status, payload?.error_code ?? 'UNKNOWN_ERROR')
+  }
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? 'download.csv'
+  return { blob: await response.blob(), filename }
 }

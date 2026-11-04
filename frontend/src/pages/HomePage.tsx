@@ -1,13 +1,12 @@
 import { ROLE_LABELS, type AuthUser } from '../api/auth'
 import { AppHeader } from '../components/AppHeader'
-import { RetailerHome } from './RetailerHome'
 
-/** Post-login home, chosen by the authenticated user's role. */
-export function HomePage({ user, token }: { user: AuthUser; token: string }) {
+/** Home for staff roles without their own workspace yet (SALESMAN in this milestone). */
+export function StaffHomePage({ user }: { user: AuthUser }) {
   return (
-    <div className="min-h-screen bg-cream-50">
+    <div className="min-h-screen bg-white">
       <AppHeader user={user} />
-      {user.role === 'RETAILER' ? <RetailerHome user={user} token={token} /> : <StaffHome user={user} />}
+      <StaffHome user={user} />
     </div>
   )
 }
