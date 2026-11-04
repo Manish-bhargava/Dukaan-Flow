@@ -147,3 +147,16 @@ def _never_send_real_email(monkeypatch):
         raise AssertionError(f"Test tried to call a real external API: {request.url}")
 
     monkeypatch.setattr(mailer_module, "_http_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(refuse)))
+
+    # Same for the OpenAI integration: no key from .env, and no real calls.
+    from app.modules.ai_orders import llm as llm_module
+
+    monkeypatch.setattr(app_settings, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(llm_module, "_http_client", lambda: httpx.Client(transport=httpx.MockTransport(refuse)))
+
+    # And Cloudinary: no credentials from .env, no real uploads.
+    from app.modules.products import images as images_module
+
+    for name in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET"):
+        monkeypatch.setattr(app_settings, name, None)
+    monkeypatch.setattr(images_module, "_http_client", lambda: httpx.Client(transport=httpx.MockTransport(refuse)))

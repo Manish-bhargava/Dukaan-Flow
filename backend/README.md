@@ -98,6 +98,29 @@ uvicorn app.main:app --reload --port 8000
 - Demo retailers: 9000000101 (Sharma), 9000000102 (Gupta). Internal demo users get a password from
   `DEMO_STAFF_PASSWORD` when you run `python -m seed.run_seed`.
 
+### Ordering (Milestone 2)
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `GET /api/v1/products`, `/products/categories` | retailer (own), staff with `retailer_id` | Catalogue with the retailer's prices, stock, active schemes |
+| `POST /api/v1/orders/quote` | retailer, salesman | Price a cart (schemes, GST, totals, stock) without ordering |
+| `POST /api/v1/orders` | retailer, salesman | Place an order (backend prices everything) |
+| `GET /api/v1/orders`, `/orders/{id}` | own / assigned / all | History, desk queue (`status`, `source`, `search`, paging) |
+| `PATCH /orders/{id}/items/{item_id}`, `POST /orders/{id}/hold`, `/approve`, `/reject` | order desk, admin | Review, correct, hold, confirm, reject |
+| `GET /api/v1/order-desk/summary` | order desk, admin | Counts per status |
+| `POST /api/v1/ai-orders/extract`, `/ai-orders/{id}/confirm` | retailer, salesman | Message → draft → order (source AI) |
+| `GET /api/v1/exports/tally/orders.csv` | order desk, admin | Confirmed orders as Tally CSV |
+
+- AI order capture needs `OPENAI_API_KEY` in `backend/.env` (optional `OPENAI_MODEL`, default
+  `gpt-4o-mini`; `OPENAI_BASE_URL` for an OpenAI-compatible endpoint). Without a key the extract endpoint
+  returns 503 `AI_NOT_CONFIGURED`; everything else works.
+- Product images: set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` in
+  `backend/.env`, then (as ADMIN) `curl -H "Authorization: Bearer <token>" -F "file=@biscuit.png"
+  http://localhost:8000/api/v1/products/<product_id>/image`. Without Cloudinary, products show pack
+  illustrations; the frontend switches to the uploaded photos automatically.
+- Order desk login needs a staff password: set `DEMO_STAFF_PASSWORD` in `.env` and run
+  `python -m seed.run_seed` (order desk: 9000000002, admin: 9000000001).
+
 ### Development-only endpoints
 
 Mounted only when `ENVIRONMENT=development`; they have no authentication.

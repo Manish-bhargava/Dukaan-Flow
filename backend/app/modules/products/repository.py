@@ -7,6 +7,10 @@ from sqlalchemy.orm import Session, joinedload
 from app.models import Category, Inventory, Product
 
 
+def get_product(db: Session, product_id: uuid.UUID) -> Product | None:
+    return db.get(Product, product_id)
+
+
 def list_active_categories(db: Session) -> list[Category]:
     return list(db.scalars(select(Category).where(Category.is_active.is_(True)).order_by(Category.name)))
 

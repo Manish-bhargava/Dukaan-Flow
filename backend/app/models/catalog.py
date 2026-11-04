@@ -40,7 +40,8 @@ class Product(Base):
     base_unit: Mapped[str] = mapped_column(String(30))
     order_unit: Mapped[str] = mapped_column(String(30))
     gst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2))
-    image_url: Mapped[str | None] = mapped_column(Text)
+    image_url: Mapped[str | None] = mapped_column(Text)  # original Cloudinary secure_url
+    image_public_id: Mapped[str | None] = mapped_column(String(255))  # Cloudinary public_id
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()

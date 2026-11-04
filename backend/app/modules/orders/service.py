@@ -7,8 +7,10 @@ Functions that change data commit on success and roll back on any failure.
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -43,6 +45,7 @@ from app.modules.retailers import repository as retailer_repository
 from app.modules.retailers.service import available_credit, get_retailer_for
 
 ORDERING_ROLES = (UserRole.RETAILER, UserRole.SALESMAN)
+IST = ZoneInfo("Asia/Kolkata")
 
 
 # ---------------------------------------------------------------- helpers
@@ -53,7 +56,8 @@ def _not_found(what: str, identifier: uuid.UUID) -> AppException:
 
 
 def _new_order_number(now: datetime) -> str:
-    return f"DF-{now:%Y%m%d}-{uuid.uuid4().hex[:8].upper()}"
+    """DF-<date in India>-<random>, e.g. DF-20261104-1A2B3C4D."""
+    return f"DF-{now.astimezone(IST):%Y%m%d}-{uuid.uuid4().hex[:8].upper()}"
 
 
 def _load_products(db: Session, product_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, Product]:
@@ -110,6 +114,9 @@ def _apply_line(item: OrderItem, product: Product, line: pricing.LineAmounts) ->
     item.discount_percentage = line.discount_percentage
     item.discount_amount = line.discount_amount
     item.gst_rate = line.gst_rate
+    item.tax_inclusive = line.tax_inclusive
+    item.scheme_id = line.scheme_id
+    item.scheme_snapshot = line.scheme.snapshot() if line.scheme else None
     item.taxable_amount = line.taxable_amount
     item.gst_amount = line.gst_amount
     item.line_total = line.line_total
@@ -131,7 +138,7 @@ def _credit_status(db: Session, retailer_id: uuid.UUID, grand_total: Decimal) ->
 def _ensure_open(order: Order) -> None:
     if order.status not in OPEN_ORDER_STATUSES:
         raise AppException(
-            f"Order is {order.status}; only PENDING or CREDIT_HOLD orders can be changed",
+            f"Order is {order.status}; only open (PENDING, CREDIT_HOLD or ON_HOLD) orders can be changed",
             ErrorCode.INVALID_ORDER_STATUS,
             409,
             {"status": order.status},
@@ -153,6 +160,57 @@ def resolve_ordering_retailer(db: Session, actor: User, retailer_id: uuid.UUID |
     return get_retailer_for(db, actor, retailer_id)
 
 
+def _price_items(
+    db: Session, retailer: Retailer, items: Sequence[OrderItemInput], at: datetime
+) -> tuple[dict[uuid.UUID, Product], list[pricing.LineAmounts]]:
+    """Validate products/units and price each line for the retailer at `at`."""
+    product_ids = [item.product_id for item in items]
+    _ensure_unique_products(product_ids)
+    products = _load_products(db, product_ids)
+    for item in items:
+        _ensure_order_unit(products[item.product_id], item.unit)
+    lines = pricing.price_lines(
+        db, retailer.id, [(products[item.product_id], item.quantity) for item in items], at
+    )
+    return products, lines
+
+
+@dataclass(frozen=True)
+class QuoteLine:
+    product: Product
+    line: pricing.LineAmounts
+    available_stock: Decimal
+
+    @property
+    def stock_ok(self) -> bool:
+        return self.line.paid_quantity + self.line.free_quantity <= self.available_stock
+
+
+@dataclass(frozen=True)
+class Quote:
+    lines: list[QuoteLine]
+    totals: pricing.OrderTotals
+
+    @property
+    def can_order(self) -> bool:
+        return all(line.stock_ok for line in self.lines)
+
+
+def quote_order(db: Session, actor: User, data: CreateOrderInput) -> Quote:
+    """Cart preview: the same pricing, schemes and stock check as order creation, without
+    saving anything. Stock shortages are reported per line instead of refusing."""
+    retailer = resolve_ordering_retailer(db, actor, data.retailer_id)
+    products, lines = _price_items(db, retailer, data.items, datetime.now(UTC))
+    stock = inventory_repository.get_stock(db, products.keys())
+    return Quote(
+        lines=[
+            QuoteLine(products[item.product_id], line, stock.get(item.product_id, Decimal(0)))
+            for item, line in zip(data.items, lines)
+        ],
+        totals=pricing.calculate_totals(lines),
+    )
+
+
 def build_order(
     db: Session,
     actor: User,
@@ -168,16 +226,9 @@ def build_order(
     Prices, schemes, GST and totals are always calculated here from the database;
     nothing price-related is accepted from the caller.
     """
-    product_ids = [item.product_id for item in items]
-    _ensure_unique_products(product_ids)
-    products = _load_products(db, product_ids)
-    for item in items:
-        _ensure_order_unit(products[item.product_id], item.unit)
-
     now = datetime.now(UTC)
-    lines = pricing.price_lines(
-        db, retailer.id, [(products[item.product_id], item.quantity) for item in items], now
-    )
+    products, lines = _price_items(db, retailer, items, now)
+    product_ids = [item.product_id for item in items]
     _ensure_stock_available(
         db, {line_product: line.paid_quantity + line.free_quantity
              for line_product, line in zip(product_ids, lines)}, products
@@ -227,13 +278,41 @@ def get_order(db: Session, actor: User, order_id: uuid.UUID) -> Order:
     return order
 
 
-def list_orders(db: Session, actor: User, status: OrderStatus | None = None) -> list[Order]:
+def _visible_retailers(db: Session, actor: User) -> list[uuid.UUID] | None:
     assigned = (
         retailer_repository.get_assigned_retailer_ids(db, actor.id)
         if actor.role == UserRole.SALESMAN
         else []
     )
-    return repository.list_orders(db, visible_retailer_ids(actor, assigned), status)
+    return visible_retailer_ids(actor, assigned)
+
+
+def list_orders(db: Session, actor: User, status: OrderStatus | None = None) -> list[Order]:
+    return repository.list_orders(db, _visible_retailers(db, actor), status)
+
+
+def search_orders(
+    db: Session,
+    actor: User,
+    *,
+    statuses: Sequence[OrderStatus] = (),
+    source: OrderSource | None = None,
+    search: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+) -> tuple[list[Order], int]:
+    """Paginated order list, limited to the retailers the actor may see.
+    `search` matches the order number or the retailer's shop name."""
+    return repository.search_orders(
+        db, _visible_retailers(db, actor), list(statuses), source,
+        (search or "").strip() or None, (page - 1) * limit, limit,
+    )
+
+
+def status_counts(db: Session, actor: User) -> dict[str, int]:
+    ensure_role(actor, *ORDER_DESK_ROLES)
+    counts = repository.count_by_status(db)
+    return {status.value: counts.get(status.value, 0) for status in OrderStatus}
 
 
 # ---------------------------------------------------------------- Order Desk
@@ -287,7 +366,8 @@ def correct_order_item(
         db.add(correction)
         _apply_line(item, product, line)
         _apply_totals(order, pricing.calculate_totals(order.items))
-        order.status = _credit_status(db, order.retailer_id, order.grand_total)
+        if order.status != OrderStatus.ON_HOLD:  # a manual hold stays until the desk acts
+            order.status = _credit_status(db, order.retailer_id, order.grand_total)
 
         if data.save_alias and data.save_alias.strip():
             ai_repository.save_alias(db, order.retailer_id, product.id, data.save_alias.strip())
@@ -402,6 +482,26 @@ def _place_on_credit_hold(db: Session, order_id: uuid.UUID) -> None:
     if order is not None and order.status == OrderStatus.PENDING:
         order.status = OrderStatus.CREDIT_HOLD
     db.commit()
+
+
+def hold_order(db: Session, actor: User, order_id: uuid.UUID, reason: str) -> Order:
+    """Order Desk puts an open order ON_HOLD with a reason (e.g. waiting for the retailer).
+    It can still be corrected, approved or rejected later. No stock or credit changes."""
+    ensure_role(actor, *ORDER_DESK_ROLES)
+    if not reason or not reason.strip():
+        raise AppException("A hold reason is required", ErrorCode.VALIDATION_ERROR, 422)
+    try:
+        order = repository.get_order(db, order_id, lock=True)
+        if order is None:
+            raise _not_found("Order", order_id)
+        _ensure_open(order)
+        order.status = OrderStatus.ON_HOLD
+        order.hold_reason = reason.strip()
+        db.commit()
+        return order
+    except Exception:
+        db.rollback()
+        raise
 
 
 def reject_order(db: Session, actor: User, order_id: uuid.UUID, reason: str) -> Order:

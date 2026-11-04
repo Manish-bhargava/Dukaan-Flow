@@ -6,6 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import Settings, settings
 from app.exceptions.handlers import register_exception_handlers
 from app.modules.auth.router import router as auth_router
+from app.modules.ai_orders.router import router as ai_orders_router
+from app.modules.exports.router import router as exports_router
+from app.modules.orders.router import desk_router as order_desk_router
+from app.modules.orders.router import router as orders_router
 from app.modules.products.router import router as products_router
 from app.utils.responses import success_response
 
@@ -30,6 +34,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Content-Disposition"],  # CSV download file names
     )
 
     register_exception_handlers(app)
@@ -39,6 +44,10 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     api_router.add_api_route("/health", health_check, methods=["GET"], tags=["health"])
     api_router.include_router(auth_router)
     api_router.include_router(products_router)
+    api_router.include_router(orders_router)
+    api_router.include_router(order_desk_router)
+    api_router.include_router(ai_orders_router)
+    api_router.include_router(exports_router)
 
     if app_settings.is_development:
         from app.modules.dev.router import router as dev_router

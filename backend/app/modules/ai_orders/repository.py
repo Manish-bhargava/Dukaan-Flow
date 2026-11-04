@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import AiExtraction, RetailerAlias
+from app.models import AiExtraction, Category, Order, OrderItem, Product, RetailerAlias
 from app.utils.text import normalize_text
 
 
@@ -35,3 +35,23 @@ def save_alias(db: Session, retailer_id: uuid.UUID, product_id: uuid.UUID, alias
             set_={"product_id": statement.excluded.product_id, "alias": statement.excluded.alias},
         )
     )
+
+
+def get_aliases(db: Session, retailer_id: uuid.UUID) -> list[RetailerAlias]:
+    return list(db.scalars(select(RetailerAlias).where(RetailerAlias.retailer_id == retailer_id)))
+
+
+def get_catalogue(db: Session, product_ids: list[uuid.UUID]) -> list[tuple[Product, str]]:
+    """Active products (with category name) among `product_ids`."""
+    statement = (
+        select(Product, Category.name)
+        .join(Product.category)
+        .where(Product.id.in_(product_ids), Product.is_active.is_(True), Category.is_active.is_(True))
+        .order_by(Product.sku)
+    )
+    return [(product, category) for product, category in db.execute(statement).tuples()]
+
+
+def get_recent_product_ids(db: Session, retailer_id: uuid.UUID, orders: int = 10) -> set[uuid.UUID]:
+    recent = select(Order.id).where(Order.retailer_id == retailer_id).order_by(Order.created_at.desc()).limit(orders)
+    return set(db.scalars(select(OrderItem.product_id).where(OrderItem.order_id.in_(recent.scalar_subquery()))))

@@ -27,6 +27,10 @@ class ErrorCode:
     CREDIT_LIMIT_EXCEEDED = "CREDIT_LIMIT_EXCEEDED"
     INVALID_ORDER_STATUS = "INVALID_ORDER_STATUS"
     INVALID_EXTRACTION_STATUS = "INVALID_EXTRACTION_STATUS"
+    AI_NOT_CONFIGURED = "AI_NOT_CONFIGURED"
+    AI_SERVICE_UNAVAILABLE = "AI_SERVICE_UNAVAILABLE"
+    IMAGE_STORAGE_NOT_CONFIGURED = "IMAGE_STORAGE_NOT_CONFIGURED"
+    IMAGE_UPLOAD_FAILED = "IMAGE_UPLOAD_FAILED"
     DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
     INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
 
@@ -67,6 +71,7 @@ class OrderSource(StrEnum):
 class OrderStatus(StrEnum):
     PENDING = "PENDING"
     CREDIT_HOLD = "CREDIT_HOLD"
+    ON_HOLD = "ON_HOLD"  # put on hold by the Order Desk (hold_reason)
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
@@ -87,7 +92,7 @@ class CreditTransactionType(StrEnum):
 ORDER_DESK_ROLES = (UserRole.ORDER_DESK, UserRole.ADMIN)
 
 # Orders can only be corrected, approved or rejected while in one of these statuses.
-OPEN_ORDER_STATUSES = (OrderStatus.PENDING, OrderStatus.CREDIT_HOLD)
+OPEN_ORDER_STATUSES = (OrderStatus.PENDING, OrderStatus.CREDIT_HOLD, OrderStatus.ON_HOLD)
 
 # Login methods by role: retailers use phone + OTP only; internal users use phone + password only.
 OTP_LOGIN_ROLES = (UserRole.RETAILER,)

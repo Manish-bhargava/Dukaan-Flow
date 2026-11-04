@@ -3,8 +3,11 @@
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import update
 
 from app.core.security import create_access_token
+from app.models import Scheme
+from seed.run_seed import seed_id
 from tests.conftest import seed_user
 
 URL = "/api/v1/products"
@@ -64,10 +67,27 @@ def test_search_category_filter_and_pagination(tx_client, tx):
 
 
 @pytest.mark.parametrize("key", ["order_desk", "admin", "salesman_sunil"])
-def test_staff_cannot_use_retailer_catalogue(tx_client, tx, key):
-    for url in (URL, f"{URL}/categories"):
-        response = get(tx_client, tx, key, url=url)
-        assert (response.status_code, response.json()["error_code"]) == (403, "FORBIDDEN")
+def test_staff_must_name_a_retailer(tx_client, tx, key):
+    response = get(tx_client, tx, key)
+    assert (response.status_code, response.json()["error_code"]) == (422, "VALIDATION_ERROR")
+
+
+def test_order_desk_sees_a_named_retailers_prices(tx_client, tx):
+    gupta = str(seed_id("retailer", "gupta"))
+    as_desk = by_sku(get(tx_client, tx, "order_desk", retailer_id=gupta, limit=100))
+    as_gupta = by_sku(get(tx_client, tx, "retailer_gupta", limit=100))
+    assert as_desk == as_gupta
+
+
+def test_retailer_cannot_see_another_retailers_prices(tx_client, tx):
+    response = get(tx_client, tx, "retailer_sharma", retailer_id=str(seed_id("retailer", "gupta")))
+    assert (response.status_code, response.json()["error_code"]) == (403, "FORBIDDEN")
+
+
+def test_salesman_only_sees_assigned_retailers(tx_client, tx):
+    # Sharma is assigned to Sunil, not Deepak.
+    sharma = str(seed_id("retailer", "sharma"))
+    assert get(tx_client, tx, "salesman_deepak", retailer_id=sharma).status_code == 403
 
 
 def test_catalogue_requires_login(tx_client):
@@ -78,3 +98,19 @@ def test_catalogue_requires_login(tx_client):
 @pytest.mark.parametrize("params", [{"page": 0}, {"limit": 101}, {"category_id": "nope"}])
 def test_invalid_query_is_rejected(tx_client, tx, params):
     assert get(tx_client, tx, **params).status_code == 422
+
+
+def test_has_scheme_lists_only_products_on_offer(tx_client, tx):
+    offers = get(tx_client, tx, has_scheme="true", limit=100)
+    assert offers.status_code == 200
+    items = by_sku(offers)
+    # Seeded: biscuit 75g buy 10 get 1, detergent 1kg 3% off at 5+; the noodles scheme has expired.
+    assert set(items) == {"SKU-BS-075", "SKU-DT-1KG"}
+    assert offers.json()["data"]["total"] == 2
+    assert all(item["schemes"] for item in items.values())
+    assert items["SKU-BS-075"]["schemes"][0]["description"] == "Buy 10 get 1 free"
+
+
+def test_has_scheme_excludes_inactive_schemes(tx_client, tx):
+    tx.execute(update(Scheme).where(Scheme.product_id == seed_id("product", "SKU-DT-1KG")).values(is_active=False))
+    assert set(by_sku(get(tx_client, tx, has_scheme="true", limit=100))) == {"SKU-BS-075"}

@@ -19,6 +19,7 @@ class PriceOut(BaseModel):
 class SchemeOut(BaseModel):
     id: uuid.UUID
     scheme_type: str
+    description: str  # e.g. "Buy 10 get 1 free"
     min_quantity: Decimal
     free_quantity: Decimal
     discount_percentage: Decimal
@@ -35,7 +36,8 @@ class ProductOut(BaseModel):
     base_unit: str
     order_unit: str
     gst_rate: Decimal
-    image_url: str | None
+    image_url: str | None  # optimized delivery URL (800px, auto format/quality); None: no image
+    thumbnail_url: str | None  # same image at 400px for lists
     price: PriceOut
     stock_cases: Decimal
     in_stock: bool
@@ -47,3 +49,10 @@ class ProductPageOut(BaseModel):
     page: int
     limit: int
     total: int
+
+
+class ProductImageOut(BaseModel):
+    product_id: uuid.UUID
+    image_public_id: str
+    image_url: str
+    thumbnail_url: str

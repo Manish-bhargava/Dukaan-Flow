@@ -157,13 +157,14 @@ Return the authenticated user's profile and role.
 ## 4. Product Catalogue APIs
 
 ### GET `/products`
-Fetch the product catalogue available to the authenticated retailer (RETAILER only in V1; other roles get `FORBIDDEN`, 403). Only active products in active categories that have a current dealer price for the retailer are listed.
+Fetch a retailer's catalogue with their prices. RETAILER: always their own (`retailer_id` of another shop → `FORBIDDEN`). SALESMAN / ORDER_DESK / ADMIN: `retailer_id` is required (422 without it) and must be a retailer they may access. Only active products in active categories that have a current dealer price for the retailer are listed.
 
 Query parameters:
 - `search` (name, brand or SKU, case-insensitive; max 100 chars)
 - `category_id`
 - `page` (default 1)
 - `limit` (default 20, max 100)
+- `has_scheme` (`true`: only products with a scheme active now; used by the retailer's Offers & Schemes section)
 
 Response data:
 ```json
@@ -185,10 +186,21 @@ Response data:
 `case_price` is the dealer price for one order unit before GST and schemes, for display only; order totals are always calculated by the backend when an order is placed. `schemes` lists the schemes active now.
 
 ### GET `/products/categories`
-Active categories (`[{"id", "name"}]`), for the catalogue filter. RETAILER only in V1.
+Active categories (`[{"id", "name"}]`), for the catalogue filter. Any signed-in user.
+
+Each scheme in `GET /products` also has a `description` (e.g. "Buy 10 get 1 free", "3% off on 5+").
 
 ### GET `/products/{product_id}`
-Fetch one product with its retailer-specific price, stock and scheme.
+Fetch one product with its retailer-specific price, stock and active schemes (same item shape and access rules as `GET /products`; staff pass `retailer_id`). `PRODUCT_NOT_FOUND` (404) if it is inactive or has no current price for the retailer.
+
+Image fields on every product: `image_url` (800 px) and `thumbnail_url` (400 px) are Cloudinary delivery URLs with `f_auto,q_auto,c_pad,b_white` (automatic format and quality, whole pack padded on white, never cropped); both are `null` when no image is uploaded, and the frontend then shows a pack illustration.
+
+### POST `/products/{product_id}/image`
+ADMIN only. `multipart/form-data` with `file` (JPEG, PNG or WebP, checked by content; max 5 MB). The backend uploads it to Cloudinary with a signed request (public_id `CLOUDINARY_FOLDER/<sku>`, overwriting the previous image) and stores the returned `secure_url` in `products.image_url` and the `public_id` in `products.image_public_id`.
+
+Response data: `{"product_id", "image_public_id", "image_url", "thumbnail_url"}`.
+
+Errors: `FORBIDDEN` (403), `PRODUCT_NOT_FOUND` (404), `VALIDATION_ERROR` (422, wrong type or too large), `IMAGE_STORAGE_NOT_CONFIGURED` (503, Cloudinary settings missing), `IMAGE_UPLOAD_FAILED` (502, Cloudinary refused or unreachable; nothing is saved).
 
 Rules:
 - Retailers must only see their own dealer prices.
@@ -215,112 +227,106 @@ Return retailer details if the authenticated user has permission.
 
 ## 6. AI Order Capture APIs
 
+Flow: text → LLM extraction (`app/modules/ai_orders/llm.py`) → backend SKU matching (`matcher.py`) → stored draft (`ai_extractions`) → user review → `confirm` places the order through the normal order path. AI never creates, prices or approves an order, and never sees prices, stock or credit.
+
 ### POST `/ai-orders/extract`
+RETAILER (own shop) or SALESMAN (assigned shop, `retailer_id`). Reads a free-text order into a draft; creates no order.
 
-Accept a retailer's natural-language order and return extracted items with product matches.
-
-Request:
-```json
-{
-  "message": "bhaiya 5 peti biscuit chhota aur 2 peti washing powder",
-  "language": "auto"
-}
-```
+Request: `{"message": "bhaiya 5 peti biscuit chhota, 2 peti washing powder 1 kilo, chai patti 250 wala 1 peti"}` (1–2000 chars).
 
 Response data:
 ```json
 {
   "extraction_id": "uuid",
+  "status": "PENDING",
+  "original_message": "...",
+  "model_name": "gpt-4o-mini",
   "items": [
     {
+      "id": "uuid",
       "original_text": "5 peti biscuit chhota",
-      "product_name": "Glucose Biscuit 75g",
-      "quantity": 5,
+      "extracted_name": "glucose biscuit small",
+      "quantity": "5.000",
       "unit": "case",
-      "matched_product_id": "uuid",
-      "confidence": 0.94,
-      "alternatives": [],
-      "requires_clarification": false
+      "product": {"product_id": "uuid", "sku": "SKU-BS-075", "name": "Glucose Biscuit 75g", "pack_size": "75g", "order_unit": "case"},
+      "confidence": "0.900",
+      "alternatives": [{"product_id": "uuid", "sku": "SKU-BS-150", "name": "Glucose Biscuit 150g", "pack_size": "150g", "confidence": 0.71}],
+      "requires_clarification": false,
+      "clarification": null
     }
   ]
 }
 ```
 
-Rules:
-- Use an LLM for structured text extraction only.
-- Use backend matching logic to identify products.
-- Use retailer-specific aliases and fuzzy matching where useful.
-- Return alternatives when a match is uncertain.
-- Ask for clarification when product or unit is ambiguous.
-- Never create or approve an order directly from AI extraction.
-- AI must not determine prices, schemes, stock, GST or credit.
+Matching rules:
+- The LLM (OpenAI Chat Completions, Structured Outputs, temperature 0) gets the message, the retailer's own catalogue (SKU, name, brand, category, pack, order unit, the retailer's saved wording) and recently ordered SKUs. It returns per line: original text, English description, quantity, unit (`case`/`piece`/null, never assumed) and up to 3 candidate SKUs with a confidence.
+- The backend accepts only SKUs from that catalogue, applies the retailer's alias when it is exactly the line's product wording, and uses RapidFuzz for alternatives or as a fallback.
+- `requires_clarification` (with a `clarification` message) when: no product, confidence < 0.75, no quantity, no unit, or a unit other than the product's order unit (pieces are never converted to cases).
+
+Errors: `AI_NOT_CONFIGURED` (503, `OPENAI_API_KEY` is not set; there is no mock fallback), `AI_SERVICE_UNAVAILABLE` (503, provider error or unreadable response), `FORBIDDEN` (403, other roles), `VALIDATION_ERROR` (422).
+
+### GET `/ai-orders/{extraction_id}`
+The stored draft (same shape), for its retailer / assigned salesman only.
 
 ### POST `/ai-orders/{extraction_id}/confirm`
-
-Confirm corrected extraction items and create an order.
-
-The backend must independently validate product IDs, quantities, retailer access, prices, schemes, stock and credit.
+Place the reviewed draft as an order (`source` AI). Request: `{"items": [{"extraction_item_id": "uuid or null", "product_id": "uuid", "quantity": 5, "unit": "case"}], "remarks": null}`. Items without `extraction_item_id` were added by the user. Validated, priced and stock-checked exactly like `POST /orders`; returns the order (201). When the user chose a different product than the match, the line's wording (without quantity, unit and filler words) is saved as that retailer's alias. A confirmed draft cannot be confirmed again (`INVALID_EXTRACTION_STATUS`, 409).
 
 ## 7. Order APIs
 
-### POST `/orders`
+Statuses: `PENDING` (submitted), `CREDIT_HOLD` (above available credit), `ON_HOLD` (held by the Order Desk), `APPROVED` (confirmed), `REJECTED`. Every action checks role and retailer access in the service.
 
-Create an order manually from the retailer's cart.
+### POST `/orders/quote`
+Price a cart without placing it (RETAILER / SALESMAN). Same request as `POST /orders`. Uses the same pricing, scheme engine and stock data as order creation; stock shortages are reported per line instead of refusing.
+
+Response data: `{"lines": [{product_id, sku, name, pack_size, order_unit, quantity, free_quantity, price_basis, unit_price, tax_inclusive, gst_rate, discount_percentage, discount_amount, taxable_amount, gst_amount, line_total, scheme: {scheme_type, description, min_quantity, free_quantity, discount_percentage} | null, available_stock, stock_ok}], "totals": {subtotal, discount_total, taxable_amount, gst_amount, grand_total}, "can_order": true}`.
+
+### POST `/orders`
+Create an order from the cart (RETAILER for their own shop; SALESMAN with `retailer_id`). Returns the order (201).
 
 Request:
 ```json
 {
-  "items": [
-    {
-      "product_id": "uuid",
-      "quantity": 10,
-      "unit": "case"
-    }
-  ],
+  "items": [{"product_id": "uuid", "quantity": 10, "unit": "case"}],
   "remarks": "Deliver in the morning"
 }
 ```
 
-The backend calculates prices, schemes, GST and totals. Never trust client-submitted prices or discounts.
+The backend calculates prices, schemes, GST and totals; any price, discount or total fields sent by the client are ignored. Quantities must be > 0 and in the product's order unit (other units are refused, not converted); each product once per order; paid + free cases must be in stock (`INSUFFICIENT_STOCK`, 409). Orders above the retailer's available credit are created as `CREDIT_HOLD`.
 
 ### GET `/orders`
-List orders accessible to the authenticated user.
+Orders visible to the user (RETAILER: own; SALESMAN: assigned retailers; ORDER_DESK/ADMIN: all), newest first.
 
-Optional filters:
-- `status`
-- `from_date`
-- `to_date`
-- `retailer_id` (only for authorized roles)
-- `page`
-- `limit`
+Query: `status` (repeatable), `source` (MANUAL, AI, SALESMAN), `search` (order number or shop name), `page`, `limit` (max 100).
+Response data: `{"items": [{id, order_number, status, source, retailer: {id, shop_name, city}, item_count, grand_total, created_at}], "page", "limit", "total"}`.
 
 ### GET `/orders/{order_id}`
-Fetch order details and item-level price, scheme and tax snapshots.
+Order with retailer details (shop, owner, phone, address, city, GSTIN), `remarks`, `hold_reason`, `rejection_reason`, `ai` (`{extraction_id, original_message}` for AI orders), totals and items. Each item carries its snapshots: name, SKU, paid/free quantity, price basis, unit price, `tax_inclusive`, discount, GST, line total, `scheme` (from `scheme_snapshot`) and its `corrections`.
 
-### PATCH `/orders/{order_id}/items`
-Order desk can correct products or quantities before approval. Store every correction in `order_corrections`.
+### PATCH `/orders/{order_id}/items/{item_id}`
+ORDER_DESK/ADMIN correction of an open order's line: `{"new_product_id": "uuid?", "new_quantity": 5, "unit": "case?", "reason": "...", "save_alias": "retailer wording?"}`. The line is re-priced with the prices and schemes effective when the order was placed and recorded in `order_corrections`. Returns the updated order.
+
+### POST `/orders/{order_id}/hold`
+ORDER_DESK/ADMIN: `{"reason": "..."}` (required). Open order → `ON_HOLD`. No stock or credit change.
 
 ### POST `/orders/{order_id}/approve`
-Approve a pending order after rechecking stock and credit.
+ORDER_DESK/ADMIN confirmation: `{"credit_override_reason": null}`. Rechecks stock (paid + free) and credit under row locks, deducts stock, debits credit, sets `APPROVED`. Above available credit it is refused (`CREDIT_LIMIT_EXCEEDED`, 409) unless `credit_override_reason` is given (stored in the ledger entry).
 
 ### POST `/orders/{order_id}/reject`
-Reject an order with a reason.
+ORDER_DESK/ADMIN: `{"reason": "..."}` (required; shown to the retailer).
 
 Rules:
-- Only ORDER_DESK and ADMIN can approve/reject.
-- Retailers cannot approve or modify submitted orders.
-- Approval must atomically update inventory, stock movements and credit records.
-- Prevent negative stock and concurrent overselling.
-- Rejected orders must not deduct stock.
-- Approved orders retain their original price, scheme and tax snapshots.
+- Only ORDER_DESK and ADMIN can correct, hold, approve or reject (`FORBIDDEN`, 403 otherwise).
+- Only open orders (PENDING, CREDIT_HOLD, ON_HOLD) can be changed (`INVALID_ORDER_STATUS`, 409).
+- Retailers cannot see other retailers' orders (`FORBIDDEN`, 403).
+- Approval atomically updates inventory, stock movements and credit; rejected or held orders never deduct stock.
+- Orders keep their original price, scheme and tax snapshots.
 
 ## 8. Order Desk APIs
 
-### GET `/order-desk/queue`
-Return pending orders and credit-held orders.
+The incoming queue is `GET /orders?status=PENDING&status=CREDIT_HOLD&status=ON_HOLD`.
 
 ### GET `/order-desk/summary`
-Return counts of pending, credit-held, approved and rejected orders.
+ORDER_DESK/ADMIN: order counts per status, e.g. `{"PENDING": 3, "CREDIT_HOLD": 1, "ON_HOLD": 0, "APPROVED": 12, "REJECTED": 1}`.
 
 ## 9. Dashboard APIs
 
@@ -343,15 +349,13 @@ ADMIN and authorized ORDER_DESK users only.
 
 ### GET `/exports/tally/orders.csv`
 
-Export approved orders in Tally-compatible CSV format.
+ORDER_DESK/ADMIN. Confirmed (APPROVED) orders as a CSV download (UTF-8 with BOM), one row per order line, oldest first. Layout in `app/modules/exports/tally.py`.
 
-Optional filters:
-- `from_date`
-- `to_date`
+Query: `from_date`, `to_date` (YYYY-MM-DD, inclusive, by confirmation date in IST).
 
-Include retailer details, GSTIN, product SKU, quantities, free quantities, price, discount, taxable amount, GST and final amount.
+Columns: Voucher Date (order date), Voucher Number, Confirmed On, Party Name, Party GSTIN, Party Address, Party City, Party Phone, SKU, Item Name, Billed Qty, Free Qty, Actual Qty, Unit, Rate, Rate Per (piece/case), Rate Includes GST (Yes/No; empty if not recorded), Discount %, Discount Amount, Taxable Value, GST Rate %, GST Amount, Line Amount, Scheme, Order Total.
 
-Only authorized ORDER_DESK and ADMIN users can export.
+All values come from the order snapshots. GST is not split into CGST/SGST/IGST (place of supply is not recorded). Text cells starting with `=`, `+`, `-` or `@` are prefixed with `'` so spreadsheets do not run them as formulas.
 
 ## 11. Important Business Rules
 
@@ -388,6 +392,13 @@ Only authorized ORDER_DESK and ADMIN users can export.
 | INSUFFICIENT_STOCK | Not enough stock |
 | CREDIT_LIMIT_EXCEEDED | Order exceeds available credit |
 | INVALID_ORDER_STATUS | Action not allowed for current status |
+| PRICE_NOT_AVAILABLE | No current dealer price for a product for this retailer |
+| SCHEME_CONFLICT | More than one active scheme qualifies for a line (schemes are never combined) |
+| INVALID_EXTRACTION_STATUS | AI draft already confirmed |
+| AI_NOT_CONFIGURED | AI order capture needs `OPENAI_API_KEY` |
+| AI_SERVICE_UNAVAILABLE | The AI provider failed or returned an unreadable response |
+| IMAGE_STORAGE_NOT_CONFIGURED | Cloudinary settings are missing |
+| IMAGE_UPLOAD_FAILED | Cloudinary did not accept the image |
 | INTERNAL_SERVER_ERROR | Unexpected server error |
 
 ## 13. API Implementation Guidelines

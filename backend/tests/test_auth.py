@@ -178,9 +178,13 @@ def test_otp_flow_logs_each_step_without_the_otp(api, outbox, caplog):
         send(api, SHARMA_PHONE)
         otp = outbox[SHARMA_EMAIL][0]
         token = verify(api, SHARMA_PHONE, otp).json()["data"]["access_token"]
-    for step in ("OTP generated", "OTP hash stored in Redis", "OTP email sent", "OTP verification", "OTP login successful"):
+    for step in ("[OTP] OTP generated", f"[OTP] Redis key: otp:{SHARMA_PHONE}", "[OTP] Redis SET operation started",
+                 "[OTP] Redis SET operation successful", "[OTP] Redis check after SET: EXISTS=1 TTL=120s",
+                 "[OTP] Email delivery successful via mock", "[OTP] Redis check after email: EXISTS=1",
+                 "[OTP] OTP deleted from Redis: otp:9000000101 (reason: verified successfully)", "OTP login successful"):
         assert step in caplog.text
     assert otp not in caplog.text and token not in caplog.text
+    assert hash_otp(SHARMA_PHONE, otp) not in caplog.text
     assert SHARMA_EMAIL not in caplog.text  # emails are masked in logs
 
 

@@ -3,12 +3,8 @@
 Rules (V1):
 - Quantities are in the product's order unit (cases). A PIECE price is converted to a
   case price with units_per_case; a CASE price is used as is.
-- Only schemes active at the pricing time are considered, and schemes are never combined:
-  if more than one active scheme qualifies for the same line, pricing fails with
-  SCHEME_CONFLICT so the configuration can be fixed instead of the system choosing one.
-- FREE_GOODS: free_quantity is given for every full min_quantity ordered
-  (buy 10 get 1: 9 -> 0, 10 -> 1, 25 -> 2).
-- SLAB_DISCOUNT: discount_percentage applies to the whole line once min_quantity is reached.
+- Which scheme applies, and its free quantity or discount, comes from the scheme engine
+  (app/modules/schemes/engine.py); this module only turns that into money.
 - tax_inclusive=False: GST is added on top of the discounted amount.
   tax_inclusive=True: GST is extracted from the discounted amount.
 - Money is rounded to 2 decimals (half up) per line; order totals are sums of line values.
@@ -20,26 +16,20 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from app.core.constants import ErrorCode, PriceBasis, SchemeType
+from app.core.constants import ErrorCode, PriceBasis
 from app.core.permissions import ensure_can_access_retailer
 from app.exceptions.base import AppException
 from app.models import Product, Retailer, RetailerPrice, User
 from app.modules.pricing import repository
+from app.modules.schemes import engine as schemes_engine
+from app.modules.schemes.engine import SchemeBenefit, SchemeLike
 
 HUNDRED = Decimal("100")
-
-
-class SchemeLike(Protocol):
-    id: uuid.UUID
-    scheme_type: str
-    min_quantity: Decimal
-    free_quantity: Decimal
-    discount_percentage: Decimal
 
 
 @dataclass(frozen=True)
@@ -48,6 +38,7 @@ class LineAmounts:
     free_quantity: Decimal
     price_basis: str
     unit_price: Decimal  # the retailer's dealer_price snapshot, per price_basis
+    tax_inclusive: bool  # whether unit_price already includes GST
     gross_amount: Decimal  # before discount
     discount_percentage: Decimal
     discount_amount: Decimal
@@ -55,7 +46,11 @@ class LineAmounts:
     taxable_amount: Decimal
     gst_amount: Decimal
     line_total: Decimal
-    scheme_id: uuid.UUID | None
+    scheme: SchemeBenefit | None
+
+    @property
+    def scheme_id(self) -> uuid.UUID | None:
+        return self.scheme.scheme_id if self.scheme else None
 
 
 @dataclass(frozen=True)
@@ -84,23 +79,9 @@ def calculate_line(
     if quantity <= 0:
         raise AppException("Quantity must be greater than zero", ErrorCode.VALIDATION_ERROR, 422)
 
-    qualifying = [s for s in schemes if quantity >= s.min_quantity]
-    if len(qualifying) > 1:
-        raise AppException(
-            "More than one scheme applies to this product; schemes cannot be combined",
-            ErrorCode.SCHEME_CONFLICT,
-            status_code=409,
-            details={"scheme_ids": [str(s.id) for s in qualifying]},
-        )
-    scheme = qualifying[0] if qualifying else None
-
-    free_quantity = Decimal("0")
-    discount_percentage = Decimal("0")
-    if scheme is not None and scheme.scheme_type == SchemeType.FREE_GOODS:
-        full_sets = (quantity / scheme.min_quantity).to_integral_value(rounding=ROUND_FLOOR)
-        free_quantity = full_sets * scheme.free_quantity
-    elif scheme is not None and scheme.scheme_type == SchemeType.SLAB_DISCOUNT:
-        discount_percentage = scheme.discount_percentage
+    scheme = schemes_engine.evaluate(quantity, schemes)
+    free_quantity = scheme.free_quantity if scheme else Decimal("0")
+    discount_percentage = scheme.discount_percentage if scheme else Decimal("0")
 
     case_price = dealer_price * units_per_case if price_basis == PriceBasis.PIECE else dealer_price
     gross_amount = money(quantity * case_price)
@@ -119,6 +100,7 @@ def calculate_line(
         free_quantity=free_quantity,
         price_basis=price_basis,
         unit_price=dealer_price,
+        tax_inclusive=tax_inclusive,
         gross_amount=gross_amount,
         discount_percentage=discount_percentage,
         discount_amount=discount_amount,
@@ -126,7 +108,7 @@ def calculate_line(
         taxable_amount=taxable_amount,
         gst_amount=gst_amount,
         line_total=taxable_amount + gst_amount,
-        scheme_id=scheme.id if scheme else None,
+        scheme=scheme,
     )
 
 
@@ -176,7 +158,7 @@ def price_lines(
                 tax_inclusive=price.tax_inclusive,
                 units_per_case=product.units_per_case,
                 gst_rate=product.gst_rate,
-                schemes=schemes.get(product.id, []),
+                schemes=schemes_engine.active_schemes(schemes.get(product.id, []), at),
             )
         )
     return lines

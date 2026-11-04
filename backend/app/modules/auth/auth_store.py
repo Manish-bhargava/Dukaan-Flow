@@ -81,6 +81,11 @@ end
 return {'INVALID', max_attempts - attempts}
 """
 
+# TEMPORARY (OTP debugging): read-only existence and TTL of the OTP key.
+_OTP_STATE = """
+return {redis.call('EXISTS', KEYS[1]), redis.call('TTL', KEYS[1])}
+"""
+
 _DELETE_OTP = """
 redis.call('DEL', KEYS[1], KEYS[2])
 return 1
@@ -144,7 +149,7 @@ class AuthStore:
         try:
             return self._client.eval(script, keys=keys, args=[str(a) for a in args or []])
         except Exception as exc:  # network errors, UpstashError, timeouts
-            logger.error("Redis operation failed: %s", exc)
+            logger.error("[OTP] Redis operation failed on %s: %s", keys, exc)
             raise _unavailable() from exc
 
     @staticmethod
@@ -167,6 +172,11 @@ class AuthStore:
     def verify_otp(self, phone: str, otp_hash: str, max_attempts: int) -> tuple[OtpCheck, int]:
         status, remaining = self._eval(_VERIFY_OTP, self._otp_keys(phone), [otp_hash, max_attempts])
         return OtpCheck(status), int(remaining)
+
+    def otp_state(self, phone: str) -> tuple[bool, int]:
+        """TEMPORARY (OTP debugging): (exists, ttl seconds) of otp:{phone}. Read-only."""
+        exists, ttl = self._eval(_OTP_STATE, [f"otp:{phone}"])
+        return bool(int(exists)), int(ttl)
 
     def invalidate_otp(self, phone: str) -> None:
         self._eval(_DELETE_OTP, self._otp_keys(phone))

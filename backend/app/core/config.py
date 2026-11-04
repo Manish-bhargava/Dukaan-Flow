@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     BREVO_SENDER_EMAIL: str | None = None  # a sender verified in Brevo
     BREVO_SENDER_NAME: str = "DukaanFlow"
 
+    # AI order capture (OpenAI Chat Completions with Structured Outputs). Without a key,
+    # POST /ai-orders/extract returns 503 AI_NOT_CONFIGURED; there is no mock fallback.
+    OPENAI_API_KEY: str | None = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"  # or an OpenAI-compatible endpoint
+    OPENAI_TIMEOUT_SECONDS: float = 30.0
+
+    # Product images (Cloudinary). Only the backend uses these; the API secret never reaches
+    # the browser. Without them, uploads return 503 and products show local placeholders.
+    CLOUDINARY_CLOUD_NAME: str | None = None
+    CLOUDINARY_API_KEY: str | None = None
+    CLOUDINARY_API_SECRET: str | None = None
+    CLOUDINARY_FOLDER: str = "dukaanflow/products"
+
     # Development only: if set, the seed gives internal demo users this password.
     DEMO_STAFF_PASSWORD: str | None = None
 

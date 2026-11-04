@@ -81,9 +81,14 @@ def request_otp(db: Session, store: AuthStore, phone: str) -> None:
         raise _delivery_failed()
 
     otp = generate_otp()
-    logger.info("OTP generated for user %s", user.id)
+    logger.info("[OTP] OTP generated for user %s", user.id)
+    # TEMPORARY OTP debugging logs (never the OTP, its hash, the email or credentials).
+    logger.info("[OTP] Redis key: otp:%s", phone)
+    logger.info("[OTP] Redis SET operation started (TTL %ss)", settings.OTP_EXPIRE_SECONDS)
     store.save_otp(phone, hash_otp(phone, otp), settings.OTP_EXPIRE_SECONDS)
-    logger.info("OTP hash stored in Redis for %s (expires in %ss)", phone, settings.OTP_EXPIRE_SECONDS)
+    logger.info("[OTP] Redis SET operation successful")
+    exists, ttl = store.otp_state(phone)
+    logger.info("[OTP] Redis check after SET: EXISTS=%s TTL=%ss", int(exists), ttl)
     try:
         # The mailer is async; this sync endpoint runs in a worker thread, so the send is
         # awaited on the server's event loop without blocking it.
@@ -97,15 +102,24 @@ def request_otp(db: Session, store: AuthStore, phone: str) -> None:
             exc,
             exc_info=not isinstance(exc, EmailDeliveryError),
         )
+        logger.warning("[OTP] Email delivery FAILED; deleting otp:%s so no undelivered OTP stays usable", phone)
         store.invalidate_otp(phone)
-        logger.info("OTP for %s removed from Redis after the failed send", phone)
+        logger.info("[OTP] OTP deleted from Redis: otp:%s (reason: email not delivered)", phone)
         raise _delivery_failed() from None
-    logger.info("OTP email sent to %s for user %s", mask_email(user.email), user.id)
+    logger.info("[OTP] Email delivery successful via %s (to %s, user %s)", settings.EMAIL_PROVIDER, mask_email(user.email), user.id)
+    exists, ttl = store.otp_state(phone)
+    logger.info("[OTP] Redis check after email: EXISTS=%s TTL=%ss", int(exists), ttl)
 
 
 def verify_otp(db: Session, store: AuthStore, phone: str, otp: str) -> TokenOut:
     status, remaining = store.verify_otp(phone, hash_otp(phone, otp), settings.OTP_MAX_ATTEMPTS)
-    logger.info("OTP verification for %s: %s (remaining attempts %s)", phone, status, remaining)
+    logger.info("[OTP] Verification for otp:%s: %s (remaining attempts %s)", phone, status, remaining)
+    if status == OtpCheck.OK:
+        logger.info("[OTP] OTP deleted from Redis: otp:%s (reason: verified successfully)", phone)
+    elif status == OtpCheck.LOCKED:
+        logger.info("[OTP] OTP deleted from Redis: otp:%s (reason: too many wrong attempts)", phone)
+    elif status == OtpCheck.EXPIRED:
+        logger.info("[OTP] No OTP in Redis for otp:%s (expired, already used or never stored)", phone)
     if status == OtpCheck.EXPIRED:
         raise AppException(
             "OTP has expired or is no longer valid. Please request a new OTP.",

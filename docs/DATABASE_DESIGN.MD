@@ -109,7 +109,8 @@ Stores the distributor's product catalogue.
 | base_unit | VARCHAR(30) | Example: piece |
 | order_unit | VARCHAR(30) | Example: case |
 | gst_rate | NUMERIC(5,2) | Applicable GST percentage |
-| image_url | TEXT, nullable | Product image |
+| image_url | TEXT, nullable | Cloudinary `secure_url` of the product image |
+| image_public_id | VARCHAR(255), nullable | Cloudinary `public_id` (used to replace/delete the image) |
 | is_active | BOOLEAN | Product status |
 | created_at | TIMESTAMPTZ | Creation time |
 | updated_at | TIMESTAMPTZ | Last update |
@@ -231,7 +232,7 @@ Stores retailer orders.
 | created_by | UUID | User who placed the order |
 | ai_extraction_id | UUID, nullable | Related AI extraction |
 | source | VARCHAR(20) | MANUAL, AI, SALESMAN |
-| status | VARCHAR(30) | PENDING, CREDIT_HOLD, APPROVED, REJECTED |
+| status | VARCHAR(30) | PENDING, CREDIT_HOLD, ON_HOLD, APPROVED, REJECTED |
 | subtotal | NUMERIC(14,2) | Amount before discounts |
 | discount_total | NUMERIC(14,2) | Total discount |
 | taxable_amount | NUMERIC(14,2) | Taxable value |
@@ -239,6 +240,7 @@ Stores retailer orders.
 | grand_total | NUMERIC(14,2) | Final order value |
 | remarks | TEXT, nullable | Additional instructions |
 | rejection_reason | TEXT, nullable | Reason for rejection |
+| hold_reason | TEXT, nullable | Why the Order Desk put the order ON_HOLD |
 | approved_by | UUID, nullable | Approving user |
 | approved_at | TIMESTAMPTZ, nullable | Approval time |
 | created_at | TIMESTAMPTZ | Order creation time |
@@ -262,6 +264,9 @@ Stores products and immutable pricing snapshots for each order.
 | discount_percentage | NUMERIC(5,2) | Discount applied |
 | discount_amount | NUMERIC(12,2) | Discount amount |
 | gst_rate | NUMERIC(5,2) | GST snapshot |
+| tax_inclusive | BOOLEAN, nullable | Whether unit_price included GST (NULL only for lines created before it was recorded) |
+| scheme_id | UUID, nullable | Applied scheme (FK schemes) |
+| scheme_snapshot | JSONB, nullable | Applied scheme terms at order time: scheme_type, min_quantity, free_quantity, discount_percentage, description |
 | taxable_amount | NUMERIC(14,2) | Taxable amount |
 | gst_amount | NUMERIC(14,2) | GST amount |
 | line_total | NUMERIC(14,2) | Final line amount |
@@ -269,6 +274,8 @@ Stores products and immutable pricing snapshots for each order.
 Keep the product name, SKU, price, scheme discount and GST snapshots even if the original product or price changes later.
 
 Free quantities must be stored separately from paid quantities.
+
+Order statuses: PENDING (submitted, shown as "Submitted"), CREDIT_HOLD (above available credit), ON_HOLD (held by the Order Desk with `hold_reason`), APPROVED (confirmed: stock deducted, credit debited) and REJECTED. PENDING, CREDIT_HOLD and ON_HOLD are open: they can be corrected, held, approved or rejected. A correction keeps a manual ON_HOLD; otherwise it re-evaluates PENDING vs CREDIT_HOLD. Migration `0898ff9db2db` added ON_HOLD, `hold_reason` and the three order_items columns (existing lines were backfilled only where the effective price/scheme matched the stored snapshot).
 
 ### 3.13 order_corrections
 

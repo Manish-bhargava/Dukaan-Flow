@@ -30,3 +30,6 @@ npm-debug.log*
 .DS_Store
 *.sw?
 
+
+# Local AI assistant notes (not part of the project)
+CLAUDE.md

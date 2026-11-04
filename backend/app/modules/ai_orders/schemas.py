@@ -30,12 +30,50 @@ class RecordExtractionInput(BaseModel):
 class ConfirmedItemInput(BaseModel):
     """The user's reviewed choice for one extracted line."""
 
-    extraction_item_id: uuid.UUID
+    # None for products the user added to the draft themselves.
+    extraction_item_id: uuid.UUID | None = None
     product_id: uuid.UUID
     quantity: Decimal = Field(gt=0, max_digits=12, decimal_places=3)
     unit: str = Field(min_length=1, max_length=30)
 
 
+class ExtractOrderInput(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    retailer_id: uuid.UUID | None = None  # salesmen only; retailers capture for their own shop
+
+
 class ConfirmExtractionInput(BaseModel):
     items: list[ConfirmedItemInput] = Field(min_length=1)
     remarks: str | None = None
+
+
+# ---------------------------------------------------------------- responses
+
+
+class ProductChoiceOut(BaseModel):
+    product_id: uuid.UUID
+    sku: str
+    name: str
+    pack_size: str
+    order_unit: str
+
+
+class ExtractionItemOut(BaseModel):
+    id: uuid.UUID
+    original_text: str
+    extracted_name: str
+    quantity: Decimal | None
+    unit: str | None
+    product: ProductChoiceOut | None  # the matched product (None: not recognised)
+    confidence: Decimal
+    alternatives: list[dict[str, Any]]
+    requires_clarification: bool
+    clarification: str | None  # why the user must check this line
+
+
+class ExtractionOut(BaseModel):
+    extraction_id: uuid.UUID
+    status: str
+    original_message: str
+    model_name: str | None
+    items: list[ExtractionItemOut]

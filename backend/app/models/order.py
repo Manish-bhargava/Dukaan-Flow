@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import OrderSource, OrderStatus, PriceBasis
@@ -16,6 +17,7 @@ from app.database.base import (
 )
 
 if TYPE_CHECKING:
+    from app.models.ai_order import AiExtraction
     from app.models.catalog import Product
     from app.models.retailer import Retailer
 
@@ -52,6 +54,7 @@ class Order(Base):
     grand_total: Mapped[Decimal] = mapped_column(MONEY, default=0, server_default="0")
     remarks: Mapped[str | None] = mapped_column(Text)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
+    hold_reason: Mapped[str | None] = mapped_column(Text)
     approved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created_at_column()
@@ -59,6 +62,7 @@ class Order(Base):
 
     retailer: Mapped["Retailer"] = relationship()
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order")
+    ai_extraction: Mapped["AiExtraction | None"] = relationship()
 
 
 class OrderItem(Base):
@@ -94,6 +98,11 @@ class OrderItem(Base):
     )
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
     gst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2))
+    # Whether unit_price included GST. NULL only for lines created before this was recorded.
+    tax_inclusive: Mapped[bool | None] = mapped_column(Boolean)
+    # The scheme applied to this line and a snapshot of its terms at the time (NULL: none).
+    scheme_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("schemes.id"))
+    scheme_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     taxable_amount: Mapped[Decimal] = mapped_column(MONEY)
     gst_amount: Mapped[Decimal] = mapped_column(MONEY)
     line_total: Mapped[Decimal] = mapped_column(MONEY)
