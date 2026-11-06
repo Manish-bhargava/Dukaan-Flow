@@ -210,7 +210,21 @@ Rules:
 ## 5. Retailer APIs
 
 ### GET `/retailers/me`
-Return the authenticated retailer's profile.
+RETAILER only. The signed-in retailer's profile for the Profile page:
+
+```json
+{
+  "id": "uuid", "shop_name": "Sharma Kirana Store", "owner_name": "Ramesh Sharma", "phone": "9000000101",
+  "address": "12, Napier Town Main Road", "city": "Jabalpur", "gstin": "23AAAPS1234A1Z5",
+  "assigned_salesman": {"name": "Sunil Yadav", "phone": "9000000003"},
+  "credit": {"credit_limit": "50000.00", "current_outstanding": "35000.00", "reserved_for_review": "0", "available_credit": "15000.00"},
+  "can_place_orders": true,
+  "purchases": {"total_orders": 3, "confirmed_orders": 1, "total_purchased": "8164.80",
+                "under_review_orders": 1, "under_review_amount": "4082.40", "rejected_orders": 1}
+}
+```
+
+`total_purchased` is the sum of APPROVED (confirmed) orders only; open orders (PENDING, CREDIT_HOLD, ON_HOLD) are reported separately as under review; rejected orders never count. `available_credit` = `credit_limit - current_outstanding - reserved_for_review` (orders under review hold their amount until accepted or rejected). `can_place_orders` is false when no credit is available.
 
 ### GET `/retailers/me/credit`
 Return:
@@ -265,6 +279,16 @@ Matching rules:
 
 Errors: `AI_NOT_CONFIGURED` (503, `OPENAI_API_KEY` is not set; there is no mock fallback), `AI_SERVICE_UNAVAILABLE` (503, provider error or unreadable response), `FORBIDDEN` (403, other roles), `VALIDATION_ERROR` (422).
 
+### AI order capture V1 — retailer-specific product understanding
+
+`app/modules/ai_orders/graph.py` runs one small LangGraph pipeline per message: `load_retailer_context` (the retailer's priced catalogue, saved wordings, earlier AI lines and what they became, product frequency over 90 days) → `extract_order` (OpenAI Structured Outputs reads text or a photo into lines: words, quantity, unit, candidate SKUs) → `find_product_candidates` (`matcher.find_candidates`: catalogue similarity, pack-size numbers, the retailer's saved wording, earlier AI lines with the same words, Order Desk corrections, frequency, the AI's reading) → `match_products` (only close calls go to a second OpenAI call that may pick among the candidates; an SKU outside them is ignored) → `validate_units` (`matcher.decide`: confidence, evidence, alternatives, clarification; quantities and units never assumed or converted) → `build_draft_order` (stored draft). There is no global meaning for words like "chhota": the same words can map to different products for different retailers; conflicting history caps confidence at 0.6 and asks for clarification. Each line stores `evidence` (business facts, never model reasoning), `alternatives`, `clarification_reason`, and, once placed, `order_item_id`; the order line's current product (after any Order Desk correction) is the learning signal for the next messages. An Order Desk product correction of an AI line also saves the retailer's words as their alias. The draft is reviewed by the retailer, then placed with `/confirm` (source AI) and reviewed by the Order Desk (Accept, Edit line, Request clarification, Reject); stock, price, scheme and credit are always the backend's.
+
+### POST `/ai-orders/extract-media`
+Multipart: `kind` (`image` | `voice`), `file`, optional `retailer_id` (salesmen). Image: JPEG/PNG/WebP ≤ 5 MB, read by the vision model (`original_message` = the text it read). Voice: webm/ogg/mp3/m4a/wav ≤ 10 MB, transcribed with `OPENAI_TRANSCRIBE_MODEL` (default `gpt-4o-mini-transcribe`), then read like a message. Returns the draft with `input_type` `IMAGE` / `VOICE`. Never creates an order.
+
+### GET `/ai-orders`
+The retailer's AI drafts that have not been placed as orders yet (newest 20; SALESMAN passes `retailer_id`): `[{extraction_id, created_at, original_message, item_count, needs_clarification}]`. A draft is not an order; once placed it becomes an order (source AI) that the Order Desk accepts or rejects.
+
 ### GET `/ai-orders/{extraction_id}`
 The stored draft (same shape), for its retailer / assigned salesman only.
 
@@ -273,12 +297,16 @@ Place the reviewed draft as an order (`source` AI). Request: `{"items": [{"extra
 
 ## 7. Order APIs
 
-Statuses: `PENDING` (submitted), `CREDIT_HOLD` (above available credit), `ON_HOLD` (held by the Order Desk), `APPROVED` (confirmed), `REJECTED`. Every action checks role and retailer access in the service.
+Statuses: `PENDING` (under review), `CREDIT_HOLD` (above available credit), `ON_HOLD` (offline order whose data changed, or held by the Order Desk), `CLARIFICATION_REQUIRED` (the desk asked the retailer/salesman), `APPROVED` (confirmed), `REJECTED`. Every action checks role and retailer access in the service.
+
+**Which orders the Order Desk reviews:** all of them. Catalogue orders (`POST /orders`, source MANUAL), salesman orders (source SALESMAN, online or synced offline) and AI-captured orders (`POST /ai-orders/{id}/confirm`, source AI) are created `PENDING` (or `CREDIT_HOLD` / `ON_HOLD`) and wait for the Order Desk to accept (`/approve`: stock deducted, credit debited, `APPROVED`) or reject (`/reject`, reason required). While waiting they hold their total from the retailer's available credit. Retailers still cannot place an order above their available credit; a salesman order above it arrives as `CREDIT_HOLD`.
+
+**Available credit** = `credit_limit - current_outstanding - reserved_for_review`, where `reserved_for_review` is the total of the retailer's orders awaiting the Order Desk (PENDING, ON_HOLD, CLARIFICATION_REQUIRED). So an order uses credit as soon as it is placed: confirmed orders through `current_outstanding`, orders under review by holding their amount; rejecting one releases its hold immediately, confirming it moves the amount into `current_outstanding`. CREDIT_HOLD orders hold nothing (they are already above the credit).
 
 ### POST `/orders/quote`
 Price a cart without placing it (RETAILER / SALESMAN). Same request as `POST /orders`. Uses the same pricing, scheme engine and stock data as order creation; stock shortages are reported per line instead of refusing.
 
-Response data: `{"lines": [{product_id, sku, name, pack_size, order_unit, quantity, free_quantity, price_basis, unit_price, tax_inclusive, gst_rate, discount_percentage, discount_amount, taxable_amount, gst_amount, line_total, scheme: {scheme_type, description, min_quantity, free_quantity, discount_percentage} | null, available_stock, stock_ok}], "totals": {subtotal, discount_total, taxable_amount, gst_amount, grand_total}, "can_order": true}`.
+Response data: `{"lines": [{product_id, sku, name, pack_size, order_unit, quantity, free_quantity, price_basis, unit_price, tax_inclusive, gst_rate, discount_percentage, discount_amount, taxable_amount, gst_amount, line_total, scheme: {scheme_type, description, min_quantity, free_quantity, discount_percentage} | null, available_stock, stock_ok}], "totals": {subtotal, discount_total, taxable_amount, gst_amount, grand_total}, "can_order": true, "available_credit": "15000.00", "within_credit": true}`. `can_order`: every line is in stock. `within_credit`: the total fits the retailer's available credit (a retailer cannot place the order otherwise).
 
 ### POST `/orders`
 Create an order from the cart (RETAILER for their own shop; SALESMAN with `retailer_id`). Returns the order (201).
@@ -291,7 +319,7 @@ Request:
 }
 ```
 
-The backend calculates prices, schemes, GST and totals; any price, discount or total fields sent by the client are ignored. Quantities must be > 0 and in the product's order unit (other units are refused, not converted); each product once per order; paid + free cases must be in stock (`INSUFFICIENT_STOCK`, 409). Orders above the retailer's available credit are created as `CREDIT_HOLD`.
+The backend calculates prices, schemes, GST and totals; any price, discount or total fields sent by the client are ignored. **Credit rule:** a RETAILER cannot place an order whose total is above their available credit (see above): it is refused with `CREDIT_LIMIT_EXCEEDED` (409, `details.grand_total`, `details.available_credit`, message tells them to contact their salesman or the order desk). This also applies to `POST /ai-orders/{id}/confirm`. A SALESMAN's order above the credit is created as `CREDIT_HOLD` for the Order Desk. Quantities must be > 0 and in the product's order unit (other units are refused, not converted); each product once per order; paid + free cases must be in stock (`INSUFFICIENT_STOCK`, 409). Orders above the retailer's available credit are created as `CREDIT_HOLD`.
 
 ### GET `/orders`
 Orders visible to the user (RETAILER: own; SALESMAN: assigned retailers; ORDER_DESK/ADMIN: all), newest first.
@@ -300,33 +328,102 @@ Query: `status` (repeatable), `source` (MANUAL, AI, SALESMAN), `search` (order n
 Response data: `{"items": [{id, order_number, status, source, retailer: {id, shop_name, city}, item_count, grand_total, created_at}], "page", "limit", "total"}`.
 
 ### GET `/orders/{order_id}`
-Order with retailer details (shop, owner, phone, address, city, GSTIN), `remarks`, `hold_reason`, `rejection_reason`, `ai` (`{extraction_id, original_message}` for AI orders), totals and items. Each item carries its snapshots: name, SKU, paid/free quantity, price basis, unit price, `tax_inclusive`, discount, GST, line total, `scheme` (from `scheme_snapshot`) and its `corrections`.
+Order with retailer details (shop, owner, phone, address, city, GSTIN), `remarks`, `hold_reason`, `rejection_reason`, `clarification_message`, `approved_by`, `tally_exported_at`, `ai` (`{extraction_id, original_message}` for AI orders), totals and items. Each item carries its snapshots: name, SKU, paid/free quantity, price basis, unit price, `tax_inclusive`, discount, GST, line total, `scheme` (from `scheme_snapshot`) and its `corrections`.
 
 ### PATCH `/orders/{order_id}/items/{item_id}`
-ORDER_DESK/ADMIN correction of an open order's line: `{"new_product_id": "uuid?", "new_quantity": 5, "unit": "case?", "reason": "...", "save_alias": "retailer wording?"}`. The line is re-priced with the prices and schemes effective when the order was placed and recorded in `order_corrections`. Returns the updated order.
+ORDER_DESK/ADMIN correction of an open order's line: `{"new_product_id": "uuid?", "new_quantity": 5, "unit": "case?", "reason": "...", "save_alias": "retailer wording?"}`. `reason` is required. The line is re-priced with the prices and schemes effective when the order was placed and recorded in `order_corrections` and the order history (old and new product, quantity, line and order totals). A hold or clarification request stays in place. Returns the updated order.
 
 ### POST `/orders/{order_id}/hold`
 ORDER_DESK/ADMIN: `{"reason": "..."}` (required). Open order → `ON_HOLD`. No stock or credit change.
 
 ### POST `/orders/{order_id}/approve`
-ORDER_DESK/ADMIN confirmation: `{"credit_override_reason": null}`. Rechecks stock (paid + free) and credit under row locks, deducts stock, debits credit, sets `APPROVED`. Above available credit it is refused (`CREDIT_LIMIT_EXCEEDED`, 409) unless `credit_override_reason` is given (stored in the ledger entry).
+ORDER_DESK/ADMIN confirmation: `{"credit_override_reason": null, "acknowledge_changes": false}`. Rechecks stock (paid + free) and credit under row locks, deducts stock, debits credit, sets `APPROVED` and records who confirmed it (`approved_by`, `approved_at`, history). Above available credit it is refused (`CREDIT_LIMIT_EXCEEDED`, 409) unless `credit_override_reason` is given (stored in the ledger entry). A product that is no longer active refuses it (`PRODUCT_NOT_FOUND`, 409). If a line's current dealer price or scheme benefit differs from the order's snapshot, it is refused with `ORDER_DATA_CHANGED` (409, `details.changes`) unless `acknowledge_changes` is true; the order then keeps its own prices (never changed silently).
+
+### POST `/orders/{order_id}/clarification`
+ORDER_DESK/ADMIN: `{"message": "..."}` (required). Open order → `CLARIFICATION_REQUIRED` with `clarification_message`, lines unchanged, credit still held. The retailer and salesman see the message on the order. It can then be corrected, confirmed, rejected or asked again.
 
 ### POST `/orders/{order_id}/reject`
-ORDER_DESK/ADMIN: `{"reason": "..."}` (required; shown to the retailer).
+ORDER_DESK/ADMIN, one click: body optional (`{"reason": "..."}`); without a reason "Rejected by the order desk" is stored and shown to the retailer and salesman. The user and time are in the order history. The Order Desk screen offers only Accept and Reject (no clarification or correction forms); the clarification and correction endpoints remain in the API, and clarification orders are listed under Incoming.
 
 Rules:
-- Only ORDER_DESK and ADMIN can correct, hold, approve or reject (`FORBIDDEN`, 403 otherwise).
-- Only open orders (PENDING, CREDIT_HOLD, ON_HOLD) can be changed (`INVALID_ORDER_STATUS`, 409).
+- Only ORDER_DESK and ADMIN can correct, hold, ask for clarification, approve or reject (`FORBIDDEN`, 403 otherwise).
+- Only open orders (PENDING, CREDIT_HOLD, ON_HOLD, CLARIFICATION_REQUIRED) can be changed (`INVALID_ORDER_STATUS`, 409).
 - Retailers cannot see other retailers' orders (`FORBIDDEN`, 403).
 - Approval atomically updates inventory, stock movements and credit; rejected or held orders never deduct stock.
 - Orders keep their original price, scheme and tax snapshots.
 
 ## 8. Order Desk APIs
 
-The incoming queue is `GET /orders?status=PENDING&status=CREDIT_HOLD&status=ON_HOLD`.
+All ORDER_DESK/ADMIN only (`FORBIDDEN` otherwise). These endpoints only read; order actions are the `/orders/{id}/…` endpoints above. Module: `app/modules/order_desk/`.
 
 ### GET `/order-desk/summary`
-ORDER_DESK/ADMIN: order counts per status, e.g. `{"PENDING": 3, "CREDIT_HOLD": 1, "ON_HOLD": 0, "APPROVED": 12, "REJECTED": 1}`.
+Order counts per status, e.g. `{"PENDING": 3, "CREDIT_HOLD": 1, "ON_HOLD": 0, "CLARIFICATION_REQUIRED": 1, "APPROVED": 12, "REJECTED": 1}`.
+
+### GET `/order-desk/overview`
+`received_today`, `pending_review` (PENDING + CREDIT_HOLD + ON_HOLD), `awaiting_clarification`, `confirmed_today`, `confirmed_total`, `rejected_today`, `rejected_total`, `with_stock_or_credit_issues` (open orders), `not_exported` (confirmed, not yet in Tally). Today = IST day.
+
+### GET `/order-desk/orders`
+One section: `view` = `incoming` (PENDING, CREDIT_HOLD, ON_HOLD), `clarification`, `confirmed`, `rejected` or `all`. Query: `status` (repeatable, within the view), `source`, `search` (order number, shop name, owner name or mobile), `salesman_id` (orders the salesman placed, or placed by others for the salesman's shops), `from_date`/`to_date` (IST days of placement; of confirmation in `confirmed`), `exported` (true/false), `sort` (`newest`, `oldest`, `value_desc`, `value_asc`), `page`, `limit` (≤ 50).
+
+Each row: order number, status, source, retailer (shop, owner, phone, city), `salesman` (who placed it, else the shop's salesman), `created_by`, item count, total, dates, `approved_by`, `created_offline`, `tally_exported_at`, `reason` (rejection reason / clarification message / hold reason), `warnings` and `last_action` (latest history entry).
+
+**Warnings** (open orders only; `severity` `error` blocks confirmation as it is, `warning` needs a look): `INSUFFICIENT_STOCK`, `CREDIT_LIMIT_EXCEEDED`, `PRICE_CHANGED` / `SCHEME_CHANGED` (since placement), `PRODUCT_INACTIVE`, `PRICE_NOT_AVAILABLE`, `OFFLINE_DATA_CHANGED` (an offline order's `hold_reason`), `AI_MATCH_UNCERTAIN` (an AI line below 80% confidence or that needed clarification), `POSSIBLE_DUPLICATE` (same shop, same products and quantities within 24 hours, not rejected). Warnings never change an order.
+
+### GET `/order-desk/orders/{order_id}`
+Review data: `order` (as `GET /orders/{id}`), `salesman`, `credit` (limit, outstanding, reserved for review, available), `stock` per line (`needed` paid + free, `available`, `ok`), `warnings`, `ai_lines` (original text, extracted name, quantity, confidence, clarification flag) and `history` (all order events, oldest first).
+
+### GET `/order-desk/salesmen`
+Salesmen for the filters (`id`, `name`, `phone`).
+
+### GET `/order-desk/dispatch`
+Loading list of confirmed orders, by IST confirmation date (`from_date`, `to_date`; default today) and optional `salesman_id`: `products` (paid, free and total cases per product), and `beats` per salesman (V1 records no routes or vans) with their products and `stops`, one per shop (address, phone, its orders and combined quantities).
+
+## 8a. Salesman APIs
+
+SALESMAN only. Every retailer is checked against the salesman's assignments (`retailers.assigned_salesman_id`); unassigned or inactive retailers are refused (`FORBIDDEN`, 403) or left out. Salesman orders use the normal order APIs (`POST /orders/quote`, `POST /orders` with `retailer_id`; `GET /orders?created_by_me=true` for their history, `GET /orders?retailer_id=` for one shop).
+
+### GET `/salesman/sync-bundle`
+Everything the salesman app stores on the phone (IndexedDB) for offline work: `synced_at`, `retailers` (id, shop, owner, shop contact `phone`, `registered_mobiles` (the login mobile(s) of the retailer's account, `users.phone`), address, city, GSTIN, `last_order_at`, `credit` {limit, outstanding, reserved_for_review, available}, last 5 `recent_orders`), `categories`, `products` (facts, stock, active schemes with descriptions, image URLs) and `prices` (`retailer_id -> product_id -> {dealer_price, price_basis, tax_inclusive, case_price}`).
+
+### GET `/salesman/home`
+Today's work from the database (IST calendar day): `{date, assigned_retailers, visits_today, orders_today, todays_visits: [{id, retailer_id, shop_name, started_at, ended_at, outcome}]}`. The app adds visits/orders still waiting on the phone, and keeps the last copy for offline use.
+
+### POST `/salesman/visits`
+Create or update a shop visit; `id` is generated on the phone, so re-sending is safe. Body: `{id, retailer_id, started_at, ended_at, outcome: "ORDER_PLACED" | "NO_ORDER" | null, client_order_id}`. The order placed during the visit is linked by its `client_order_id` once it has synced.
+
+### Offline order sync (`POST /orders`)
+Extra fields for orders created on a phone: `client_order_id` (unique, 8–64 chars), `created_offline`, `client_created_at`, and per item `expected_unit_price` (the price the phone showed) and `expected_scheme_ids` (the product's active schemes the phone showed). Neither is ever used for pricing; they only detect changes.
+- **Idempotent:** the same `client_order_id` from the same user returns the order already created (201, same id) instead of a duplicate; another user's id is refused (409). Concurrent duplicates are caught by the unique constraint.
+- **Review rules:** a price that differs from `expected_unit_price`, a scheme benefit for that quantity that differs from what `expected_scheme_ids` would have given (a scheme that could not have applied to the quantity is ignored), or — for `created_offline` orders — a stock shortage does not refuse or change the order: it is created `ON_HOLD` with `hold_reason` listing each issue, for the Order Desk. Above the retailer's credit it goes to `CREDIT_HOLD` (existing rule). Products that are inactive or unpriced are refused (`PRODUCT_NOT_FOUND` / `PRICE_NOT_AVAILABLE`); the phone keeps the order as "Sync failed" for retry or discard.
+- Otherwise the normal rules apply: within credit it waits for the Order Desk as `PENDING`; above credit it goes to `CREDIT_HOLD`.
+- Orders now include `created_by` `{id, name, role}`, `created_offline`, `client_created_at`, `client_order_id`.
+
+## 8b. Admin APIs
+
+All under `/admin`, ADMIN only: the router requires the ADMIN role (checked against the database user) and every admin service checks it again, so other roles get `FORBIDDEN` (403). Module: `app/modules/admin/` (`people.py` retailers/credit/salesmen/assignments/users, `catalog.py` categories/brands/products/prices/schemes/stock, `monitoring.py` dashboard/order desk/AI/sync/audit/settings, `reports.py`). Money and quantities are decimal strings. Every change is written to `audit_logs` (who, action, entity, details with old/new values); order actions stay in `order_events`. The Admin does not replace the Order Desk workflow (order actions remain the `/orders/{id}/…` endpoints, which ADMIN may use to intervene) and cannot bypass the human confirmation of AI orders.
+
+| Method & path | Purpose |
+|---|---|
+| GET `/admin/dashboard` | Counts (retailers, salesmen, products, orders today, pending, clarification, confirmed, rejected), confirmed value (today / 30 days / all), outstanding credit, low stock, retailers not ordering recently, recent orders / retailers / products / salesman visits |
+| GET/POST `/admin/retailers`, GET/PATCH `/admin/retailers/{id}` | List (search shop/owner/mobile/city/ID; `status` active/inactive/restricted; `salesman_id` or `none`; `sort` name/newest/outstanding/last_order/purchased), create (retailer + credit account + RETAILER login with `email` for OTP codes), details (credit, purchases, logins, recent orders), edit / assign salesman / activate-deactivate (deactivation also disables the retailer's login) |
+| PATCH `/admin/retailers/{id}/credit` | `{credit_limit?, ordering_restricted?, reason?}`: set the limit; pause ordering (reason required) or allow it again |
+| GET `/admin/retailers/{id}/credit-history`, `/prices` | Ledger + limit/pause changes; every active product with default price, the retailer's own price and active schemes |
+| GET `/admin/salesmen`, `/admin/salesmen/{id}` | 30-day visits/orders/value/offline orders, assigned shops, visits, sync status and sync failures |
+| POST `/admin/assignments` | `{salesman_id \| null, retailer_ids}`: assign (moves from the previous salesman; only active salesmen) or unassign |
+| GET/POST `/admin/users`, GET/PATCH `/admin/users/{id}`, POST `/admin/users/{id}/reset-password` | Staff accounts (SALESMAN/ORDER_DESK/ADMIN with password; retailer logins come with their retailer). Rules: no self role change/deactivation, at least one active admin, a salesman with shops must hand them over before deactivation/role change, retailer logins cannot become staff. Deactivation and role changes end sessions at once. Activity: last login, orders, desk actions, visits, admin changes |
+| GET/POST `/admin/categories`, PATCH `/admin/categories/{id}`; same for `/admin/brands` | Create, rename, activate/deactivate. Inactive categories hide their products; renaming a brand cascades to products |
+| GET/POST `/admin/products`, GET/PATCH `/admin/products/{id}` | List (search, category, brand, status, stock low/out), create (SKU upper-cased and unique, active brand, opening stock as a RESTOCK movement, optional default price), detail (stock, default price, price history, schemes, recent movements), edit/activate. Image: `POST /products/{id}/image` |
+| PUT `/admin/prices`, DELETE `/admin/prices?product_id&retailer_id` | Set a default price (`retailer_id` null) or a retailer's own price from now on (the current row is closed, so rows are the price history); end a retailer's own price |
+| GET/POST `/admin/schemes`, PATCH `/admin/schemes/{id}` | `state` active/upcoming/expired/inactive/all; create one scheme per product in `product_ids` (FREE_GOODS needs free_quantity, SLAB_DISCOUNT a discount); a product may have only one active scheme in overlapping dates (`SCHEME_CONFLICT`) |
+| GET `/admin/stock`, POST `/admin/stock/{product_id}/adjust`, GET `/admin/stock/{product_id}/history` | `{mode: add\|remove\|set, quantity, reason}` (reason required, never below 0); history with stock before/after, user, reason, order |
+| GET `/admin/order-desk` | Queue counts, stock/credit issues, corrected orders, Tally exported / not, actions per desk user (30 days), recent desk actions |
+| GET `/admin/ai-orders` | Extractions with message, lines (confidence, alternatives, clarification), resulting order and status; stats |
+| GET `/admin/sync` | Per-salesman sync status (from `POST /salesman/sync-status`), offline orders, conflicts (held offline orders), failed syncs (refused device orders) |
+| GET `/admin/audit` | `source` all/master/orders, `entity_type`, `action`, `actor_id`, `search`, `from_date`, `to_date`; master-data audit and order history merged, newest first |
+| GET/PUT `/admin/settings` | Business name/address/phone/GSTIN, `low_stock_cases`, `inactive_retailer_days`, `duplicate_window_hours`, `ai_low_confidence_percent` (used by the order desk warnings) |
+| GET `/admin/reports`, `/admin/reports/{name}`, `/admin/reports/{name}/csv` | sales-by-date/-retailer/-salesman/-product/-category, source-breakdown, confirmed-vs-rejected, top-retailers, top-products, salesman-performance (with `from_date`/`to_date`, IST confirmation dates), low-stock, credit-outstanding, inactive-retailers |
+
+Related changes: `POST /salesman/sync-status` (`{pending_orders, failed_orders, pending_visits, last_error}`, reported by the phone after each sync; `GET /salesman/sync-bundle` records `last_sync_at` and includes each retailer's `ordering_restricted_reason`). A salesman's device order the server refuses is logged as `SYNC_FAILED`. Orders for a retailer whose ordering is paused or who is inactive are refused with `ORDERING_RESTRICTED` (403) on every channel; `POST /orders/quote` and `GET /retailers/me` report `ordering_restricted_reason`. Products without a retailer-specific price use the default price.
 
 ## 9. Dashboard APIs
 
@@ -347,9 +444,13 @@ ADMIN and authorized ORDER_DESK users only.
 
 ## 10. Tally Export APIs
 
+### POST `/exports/tally`
+
+ORDER_DESK/ADMIN. Body `{"order_ids": [..]?, "from_date"?, "to_date"?, "include_exported": false}`. Exports the chosen confirmed orders (by ids and/or IST confirmation dates) as the CSV below, sets `tally_exported_at` and adds an `EXPORTED` history entry to each. Orders already exported are skipped unless `include_exported` is true (an explicit re-export, recorded as such), so a repeated click never exports twice; nothing to export → `NOTHING_TO_EXPORT` (409). Header `X-Exported-Count`.
+
 ### GET `/exports/tally/orders.csv`
 
-ORDER_DESK/ADMIN. Confirmed (APPROVED) orders as a CSV download (UTF-8 with BOM), one row per order line, oldest first. Layout in `app/modules/exports/tally.py`.
+ORDER_DESK/ADMIN. Read-only download (does not mark orders exported). Confirmed (APPROVED) orders as a CSV download (UTF-8 with BOM), one row per order line, oldest first. Layout in `app/modules/exports/tally.py`.
 
 Query: `from_date`, `to_date` (YYYY-MM-DD, inclusive, by confirmation date in IST).
 
@@ -392,6 +493,10 @@ All values come from the order snapshots. GST is not split into CGST/SGST/IGST (
 | INSUFFICIENT_STOCK | Not enough stock |
 | CREDIT_LIMIT_EXCEEDED | Order exceeds available credit |
 | INVALID_ORDER_STATUS | Action not allowed for current status |
+| ORDER_DATA_CHANGED | A price or scheme changed since the order was placed; confirm with `acknowledge_changes` or correct the lines |
+| ORDERING_RESTRICTED | Retailer inactive or ordering paused by the Admin |
+| CONFLICT | Value already used (mobile, email, SKU, name) or an Admin rule (e.g. last admin, salesman still has shops) |
+| NOTHING_TO_EXPORT | No confirmed orders to export (already exported ones are skipped) |
 | PRICE_NOT_AVAILABLE | No current dealer price for a product for this retailer |
 | SCHEME_CONFLICT | More than one active scheme qualifies for a line (schemes are never combined) |
 | INVALID_EXTRACTION_STATUS | AI draft already confirmed |

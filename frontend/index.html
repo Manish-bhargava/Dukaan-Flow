@@ -5,20 +5,36 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#176036" />
+    <!-- Installable app (add to home screen) -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta
       name="description"
       content="DukaanFlow: B2B ordering for FMCG distributors and kirana retailers. Order stock, see your prices and schemes, and track every order."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
+    <!-- The web font loads after the page is usable (slow 3G: data first); the system font shows until then. -->
+    <script>
+      addEventListener('load', function () {
+        setTimeout(function () {
+          var l = document.createElement('link')
+          l.rel = 'stylesheet'
+          l.href = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap'
+          document.head.appendChild(l)
+        }, 1500)
+      })
+    </script>
     <title>DukaanFlow: FMCG ordering for kirana retailers</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Shown until the app script arrives (React replaces it). -->
+    <div id="root"><div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font-family:system-ui,sans-serif;color:#176036;background:#fffdf7">
+      <img src="/favicon.svg" alt="" width="56" height="56" />
+      <div style="font-weight:800;font-size:22px">DukaanFlow</div>
+      <div style="font-size:14px;color:#5b6660">Loading… / लोड हो रहा है…</div>
+    </div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
