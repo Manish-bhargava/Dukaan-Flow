@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 import { useState, type ReactNode } from 'react'
 import type { Product } from '../api/products'
 import { useCart } from '../cart/CartContext'
@@ -36,7 +37,7 @@ export function StockNote({ product: p }: { product: Product }) {
   const low = p.in_stock && stock <= LOW_STOCK_CASES
   return (
     <span className={`text-xs font-bold ${!p.in_stock ? 'text-red-700' : low ? 'text-mango-600' : 'text-leaf-700'}`}>
-      {!p.in_stock ? 'Out of stock' : low ? `Only ${plural(stock, p.order_unit)} left` : `${plural(stock, p.order_unit)} in stock`}
+      {!p.in_stock ? t('Out of stock') : low ? t('Only {n} left', { n: plural(stock, p.order_unit) }) : t('{n} in stock', { n: plural(stock, p.order_unit) })}
     </span>
   )
 }
@@ -49,7 +50,7 @@ export function AddToCart({ product: p, wide = false }: { product: Product; wide
     <QtyStepper label={p.name} value={inCart} max={Number(p.stock_cases)} onChange={(n) => setQuantity(cartLineFor(p), n)} />
   ) : (
     <Button disabled={!p.in_stock} onClick={() => setQuantity(cartLineFor(p), 1)} className={wide ? 'w-full' : 'w-24'}>
-      {p.in_stock ? 'Add' : 'Out of stock'}
+      {p.in_stock ? t('Add') : t('Out of stock')}
     </Button>
   )
 }
@@ -72,7 +73,7 @@ export function ProductCard({ product: p, children }: { product: Product; childr
   const details = `/products/${p.id}`
   return (
     <li className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
-      <Link to={details} className="relative block aspect-square bg-white p-3" aria-label={`${p.name}: view details`}>
+      <Link to={details} className="relative block aspect-square bg-white p-3" aria-label={t('{name}: view details', { name: p.name })}>
         <ProductImage product={p} />
         <div className="absolute left-2 top-2">
           <SchemeBadges product={p} />
@@ -88,7 +89,7 @@ export function ProductCard({ product: p, children }: { product: Product; childr
         </p>
         <p className="mt-2">
           <span className="text-lg font-extrabold text-ink">{rupees(p.price.case_price)}</span>
-          <span className="text-xs text-ink-soft"> / {p.order_unit}</span>
+          <span className="text-xs text-ink-soft"> / {t(p.order_unit)}</span>
         </p>
         <p className="text-xs text-ink-soft">{gstLabel(p.gst_rate, p.price.tax_inclusive)}</p>
         <div className="mt-1">
@@ -100,7 +101,7 @@ export function ProductCard({ product: p, children }: { product: Product; childr
             <AddToCart product={p} wide />
           </div>
           <Link to={details} className="inline-flex min-h-11 items-center justify-center text-sm font-bold text-leaf-700 hover:underline">
-            View details
+            {t('View details')}
           </Link>
         </div>
       </div>

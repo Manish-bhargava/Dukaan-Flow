@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { extractOrder, type Extraction, type ExtractionItem } from '../../api/aiOrders'
+import { t } from '../../i18n'
+import { useEffect, useRef, useState } from 'react'
+import { extractMedia, extractOrder, getExtraction, type Extraction, type ExtractionItem } from '../../api/aiOrders'
 import { fetchProducts, type Product } from '../../api/products'
 import { useErrorMessage, useLoad, useToken } from '../../auth/useApi'
 import { useCart } from '../../cart/CartContext'
@@ -19,6 +20,7 @@ interface DraftRow {
   quantity: string
   unit: string
   note: string | null
+  evidence: string[]
 }
 
 function toRow(item: ExtractionItem): DraftRow {
@@ -32,6 +34,7 @@ function toRow(item: ExtractionItem): DraftRow {
     quantity: item.quantity ? String(Number(item.quantity)) : '',
     unit: item.unit && item.unit === order_unit ? item.unit : '',
     note: item.clarification,
+    evidence: item.evidence,
   }
 }
 
@@ -43,6 +46,45 @@ export function AiOrderPage() {
   const [error, setError] = useState('')
   const [extraction, setExtraction] = useState<Extraction | null>(null)
   const [rows, setRows] = useState<DraftRow[]>([])
+
+  // Opening a saved draft from My orders: /ai-order?draft=<extraction id>.
+  const draftId = new URLSearchParams(window.location.search).get('draft')
+  useEffect(() => {
+    if (!draftId) return
+    const controller = new AbortController()
+    getExtraction(token, draftId, controller.signal)
+      .then((res) => {
+        if (res.data.status === 'CONFIRMED') {
+          setError('This draft has already been sent as an order. See My orders for its status.')
+          return
+        }
+        setMessage(res.data.original_message)
+        setExtraction(res.data)
+        setRows(res.data.items.map(toRow))
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) setError(toMessage(err))
+      })
+    return () => controller.abort()
+  }, [draftId, token, toMessage])
+
+  const [mode, setMode] = useState<'text' | 'image' | 'voice'>('text')
+
+  async function readMedia(kind: 'image' | 'voice', file: Blob, filename: string) {
+    setBusy(true)
+    setError('')
+    try {
+      const result = (await extractMedia(token, kind, file, filename)).data
+      setMessage(result.original_message)
+      setExtraction(result)
+      setRows(result.items.map(toRow))
+      if (result.items.length === 0) setError(kind === 'image' ? 'No products could be read from the photo. Try a clearer photo or type the order.' : 'No products were heard in the voice note. Try again or type the order.')
+    } catch (err) {
+      setError(toMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function read() {
     if (!message.trim()) return
@@ -62,11 +104,20 @@ export function AiOrderPage() {
 
   return (
     <>
-      <h1 className="text-xl font-extrabold text-ink">Order by message</h1>
-      <p className="mt-1 text-sm text-ink-soft">Paste or type your order as you would send it on WhatsApp, in Hindi, Hinglish or English. Nothing is ordered until you review it.</p>
+      <h1 className="text-xl font-extrabold text-ink">{t('AI Order')}</h1>
+      <p className="mt-1 text-sm text-ink-soft">{t('Type your order as you would on WhatsApp, send a photo of your list, or record a voice note, in Hindi, Hinglish or English. Nothing is ordered until you review it.')}</p>
 
       {!extraction || rows.length === 0 ? (
         <div className="mt-4 max-w-2xl">
+          <div className="mb-3 inline-flex rounded-xl bg-gray-100 p-1" role="tablist">
+            {([['text', t('Type')], ['image', t('Photo')], ['voice', t('Voice note')]] as const).map(([id, label]) => (
+              <button key={id} type="button" role="tab" aria-selected={mode === id} onClick={() => { setMode(id); setError('') }}
+                className={`min-h-10 rounded-lg px-4 text-sm font-bold ${mode === id ? 'bg-white text-leaf-800 shadow-sm' : 'text-ink-soft'}`}>{label}</button>
+            ))}
+          </div>
+          {mode === 'image' && <PhotoInput busy={busy} onPhoto={(f) => readMedia('image', f, f.name)} />}
+          {mode === 'voice' && <VoiceInput busy={busy} onRecorded={(blob, name) => readMedia('voice', blob, name)} onError={setError} />}
+          {mode === 'text' && <>
           <label htmlFor="message" className="sr-only">Order message</label>
           <textarea
             id="message"
@@ -79,14 +130,15 @@ export function AiOrderPage() {
           />
           <div className="mt-2 flex flex-wrap gap-2">
             <Button busy={busy} disabled={!message.trim()} onClick={read}>
-              {busy ? 'Reading your order…' : 'Read my order'}
+              {busy ? t('Reading your order…') : t('Read my order')}
             </Button>
             {!message && (
               <Button variant="secondary" onClick={() => setMessage(EXAMPLE)}>
-                Use example
+                {t('Use example')}
               </Button>
             )}
           </div>
+          </>}
           {error && (
             <div className="mt-3">
               <ErrorBox message={error} />
@@ -168,7 +220,12 @@ function DraftReview({
           const others = [...products.values()].filter((x) => !r.suggestions.includes(x.id))
           return (
             <li key={r.key} className="py-4">
-              {r.originalText && <p className="text-sm text-ink-soft">From: “{r.originalText}”</p>}
+              {r.originalText && <p className="text-sm text-ink-soft">{t('From: “{text}”', { text: r.originalText })}</p>}
+              {r.evidence.length > 0 && (
+                <ul className="mt-1 list-disc pl-5 text-xs text-ink-soft">
+                  {r.evidence.slice(0, 3).map((e) => <li key={e}>{e}</li>)}
+                </ul>
+              )}
               <div className="mt-2 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto] sm:items-end">
                 <label className="block">
                   <span className="text-xs font-bold text-ink-soft">Product</span>
@@ -230,7 +287,7 @@ function DraftReview({
         <Button
           variant="secondary"
           onClick={() =>
-            setRows((rs) => [...rs, { key: `new-${Date.now()}-${Math.random()}`, itemId: null, originalText: null, suggestions: [], productId: '', quantity: '1', unit: '', note: null }])
+            setRows((rs) => [...rs, { key: `new-${Date.now()}-${Math.random()}`, itemId: null, originalText: null, suggestions: [], productId: '', quantity: '1', unit: '', note: null, evidence: [] }])
           }
         >
           + Add another product
@@ -251,6 +308,78 @@ function DraftReview({
         </Button>
         {unresolved > 0 && <p className="text-sm font-semibold text-mango-600">{unresolved} line{unresolved === 1 ? ' needs' : 's need'} your check.</p>}
       </div>
+    </div>
+  )
+}
+
+function PhotoInput({ busy, onPhoto }: { busy: boolean; onPhoto: (file: File) => void }) {
+  const input = useRef<HTMLInputElement>(null)
+  return (
+    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+      <p className="text-sm text-ink">{t('Take a photo of your handwritten or printed order list.')}</p>
+      <input ref={input} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onPhoto(f) }} />
+      <Button className="mt-3" busy={busy} onClick={() => input.current?.click()}>{busy ? t('Reading your photo…') : t('Take or choose a photo')}</Button>
+      <p className="mt-2 text-xs text-ink-soft">{t('JPEG, PNG or WebP, up to 5 MB.')}</p>
+    </div>
+  )
+}
+
+function VoiceInput({ busy, onRecorded, onError }: { busy: boolean; onRecorded: (blob: Blob, name: string) => void; onError: (m: string) => void }) {
+  const recorder = useRef<MediaRecorder | null>(null)
+  const chunks = useRef<Blob[]>([])
+  const [recording, setRecording] = useState(false)
+  const [seconds, setSeconds] = useState(0)
+
+  useEffect(() => {
+    if (!recording) return
+    const timer = window.setInterval(() => setSeconds((s) => s + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [recording])
+
+  async function start() {
+    onError('')
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      onError('Voice recording is not supported in this browser. Please type the order instead.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const type = ['audio/webm', 'audio/mp4', 'audio/ogg'].find((t) => MediaRecorder.isTypeSupported(t)) ?? ''
+      const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined)
+      chunks.current = []
+      rec.ondataavailable = (e) => { if (e.data.size) chunks.current.push(e.data) }
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop())
+        const mime = (rec.mimeType || 'audio/webm').split(';')[0]
+        const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'
+        onRecorded(new Blob(chunks.current, { type: mime }), `voice-note.${ext}`)
+      }
+      rec.start()
+      recorder.current = rec
+      setSeconds(0)
+      setRecording(true)
+    } catch {
+      onError('Microphone permission was not given. Allow the microphone or type the order instead.')
+    }
+  }
+
+  function stop() {
+    recorder.current?.stop()
+    setRecording(false)
+  }
+
+  return (
+    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+      <p className="text-sm text-ink">{t('Speak your order, e.g. “5 peti chhota biscuit, 2 peti washing powder 1 kilo”.')}</p>
+      {recording ? (
+        <>
+          <p className="mt-3 text-2xl font-extrabold text-red-700">● {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</p>
+          <Button className="mt-3" variant="danger" onClick={stop}>{t('Stop and read my order')}</Button>
+        </>
+      ) : (
+        <Button className="mt-3" busy={busy} onClick={start}>{busy ? t('Listening to your voice note…') : t('Start recording')}</Button>
+      )}
     </div>
   )
 }

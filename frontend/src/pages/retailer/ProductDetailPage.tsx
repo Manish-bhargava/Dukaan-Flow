@@ -1,3 +1,4 @@
+import { t } from '../../i18n'
 import { useState } from 'react'
 import { fetchProduct, type Product } from '../../api/products'
 import { useLoad } from '../../auth/useApi'
@@ -11,7 +12,7 @@ import { gstLabel, offerDetail, offerHeadline, plural, qty, rupees } from '../..
 export function ProductDetailPage({ productId }: { productId: string }) {
   const product = useLoad((t, s) => fetchProduct(t, productId, s), productId)
   if (product.state.status === 'error') return <ErrorBox message={product.state.message} onRetry={product.reload} />
-  if (product.state.status === 'loading') return <Loading label="Loading product…" />
+  if (product.state.status === 'loading') return <Loading label={t('Loading product…')} />
   return <ProductDetail product={product.state.data} />
 }
 
@@ -25,7 +26,7 @@ function ProductDetail({ product: p }: { product: Product }) {
   const facts: [string, string][] = [
     ['Brand', p.brand],
     ['Category', p.category.name],
-    ['Pack size', p.pack_size],
+    [t('Pack size'), p.pack_size],
     ['SKU', p.sku],
     ['Case contains', `${qty(p.units_per_case)} ${p.base_unit}s`],
     ['Ordered in', `${p.order_unit}s`],
@@ -34,7 +35,7 @@ function ProductDetail({ product: p }: { product: Product }) {
 
   return (
     <>
-      <Link to="/home" className="text-sm font-bold text-leaf-700">← Back to catalogue</Link>
+      <Link to="/home" className="text-sm font-bold text-leaf-700">{t('← Back to catalogue')}</Link>
       <div className="mt-4 grid gap-6 md:grid-cols-2 md:gap-10">
         <div className="mx-auto aspect-square w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6">
           <ProductImage product={p} large />
@@ -49,7 +50,7 @@ function ProductDetail({ product: p }: { product: Product }) {
 
           <p className="mt-4">
             <span className="text-3xl font-extrabold text-ink">{rupees(p.price.case_price)}</span>
-            <span className="text-base text-ink-soft"> / {p.order_unit}</span>
+            <span className="text-base text-ink-soft"> / {t(p.order_unit)}</span>
           </p>
           <p className="text-sm text-ink-soft">
             {gstLabel(p.gst_rate, p.price.tax_inclusive)}
@@ -80,19 +81,19 @@ function ProductDetail({ product: p }: { product: Product }) {
               }}
               className="min-w-40"
             >
-              {!p.in_stock ? 'Out of stock' : inCart ? 'Update cart' : 'Add to cart'}
+              {!p.in_stock ? t('Out of stock') : inCart ? t('Update cart') : t('Add to cart')}
             </Button>
           </div>
           {added && (
             <div className="mt-3">
               <Notice tone="success">
-                {plural(quantity, p.order_unit)} in your cart. <Link to="/cart" className="font-bold underline">View cart</Link> to see the scheme and total.
+                {t('{n} in your cart.', { n: plural(quantity, p.order_unit) })} <Link to="/cart" className="font-bold underline">{t('View cart')}</Link>
               </Notice>
             </div>
           )}
           {!added && inCart > 0 && (
             <p className="mt-2 text-sm text-ink-soft">
-              {plural(inCart, p.order_unit)} already in your cart. <Link to="/cart" className="font-bold text-leaf-700 underline">View cart</Link>
+              {t('{n} already in your cart.', { n: plural(inCart, p.order_unit) })} <Link to="/cart" className="font-bold text-leaf-700 underline">{t('View cart')}</Link>
             </p>
           )}
 

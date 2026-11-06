@@ -1,3 +1,4 @@
+import { t } from '../../i18n'
 import { fetchProducts } from '../../api/products'
 import { useLoad } from '../../auth/useApi'
 import { Link } from '../../components/Link'
@@ -13,18 +14,18 @@ export function OffersPage() {
 
   return (
     <>
-      <h1 className="text-xl font-extrabold text-ink">Offers & Schemes</h1>
+      <h1 className="text-xl font-extrabold text-ink">{t('Offers & Schemes')}</h1>
       <p className="mt-1 text-sm text-ink-soft">
-        Current schemes on products at your prices. Free cases and discounts are applied automatically when you order the qualifying quantity.
+        {t('Current schemes on products at your prices. Free cases and discounts are applied automatically when you order the qualifying quantity.')}
       </p>
 
       <div className="mt-4">
         {offers.state.status === 'error' ? (
           <ErrorBox message={offers.state.message} onRetry={offers.reload} />
         ) : offers.state.status === 'loading' ? (
-          <Loading label="Loading offers…" />
+          <Loading label={t('Loading offers…')} />
         ) : offers.state.data.items.length === 0 ? (
-          <Empty title="No offers right now">
+          <Empty title={t('No offers right now')}>
             Check back later, or browse the <Link to="/home" className="font-bold text-leaf-700 underline">full catalogue</Link>.
           </Empty>
         ) : (

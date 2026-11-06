@@ -1,55 +1,56 @@
-import type { ReactNode } from 'react'
+import { t } from '../../i18n'
+import { LanguageToggle } from '../../components/LanguageToggle'
+import { useEffect, type ReactNode } from 'react'
 import type { AuthUser } from '../../api/auth'
+import { fetchMyProfile } from '../../api/retailers'
+import { useAuth } from '../../auth/AuthContext'
+import { useLoad } from '../../auth/useApi'
 import { useCart } from '../../cart/CartContext'
-import { AppHeader } from '../../components/AppHeader'
-import { Link } from '../../components/Link'
+import { AppShell, type NavTab } from '../../components/AppShell'
+import { CREDIT_LEVEL_STYLES, creditLevel, rupees } from '../../format'
 import { usePathname } from '../../router'
 
-const TABS = [
-  { to: '/home', label: 'Catalogue' },
-  { to: '/offers', label: 'Offers & Schemes' },
-  { to: '/ai-order', label: 'Order by message' },
-  { to: '/orders', label: 'My orders' },
-]
-
 export function RetailerShell({ user, children }: { user: AuthUser; children: ReactNode }) {
-  const pathname = usePathname()
+  const { signOut } = useAuth()
   const { count } = useCart()
-  const active = (to: string) =>
-    pathname === to || (to === '/orders' && pathname.startsWith('/orders/')) || (to === '/home' && pathname.startsWith('/products/'))
-  const tab = (to: string, label: ReactNode) => (
-    <Link
-      key={to}
-      to={to}
-      aria-current={active(to) ? 'page' : undefined}
-      className={`flex min-h-12 shrink-0 items-center gap-2 border-b-2 px-3 text-sm font-bold ${
-        active(to) ? 'border-leaf-700 text-leaf-800' : 'border-transparent text-ink-soft hover:text-leaf-700'
-      }`}
-    >
-      {label}
-    </Link>
-  )
+  const pathname = usePathname()
+  // The retailer's own credit for the menu; refreshed on navigation and when the tab regains focus.
+  const profile = useLoad((t, s) => fetchMyProfile(t, s), `header-credit-${pathname}`)
+  const { reload } = profile
+  useEffect(() => {
+    window.addEventListener('focus', reload)
+    return () => window.removeEventListener('focus', reload)
+  }, [reload])
+  const credit = profile.state.status === 'ready' ? profile.state.data.credit : null
+
+  const tabs: NavTab[] = [
+    { to: '/home', label: t('Catalogue'), icon: 'grid', match: (p) => p.startsWith('/products/') },
+    { to: '/offers', label: t('Offers'), icon: 'tag' },
+    { to: '/ai-order', label: t('AI Order'), icon: 'sparkles' },
+    { to: '/orders', label: t('My orders'), icon: 'orders', match: (p) => p.startsWith('/orders/') },
+    { to: '/cart', label: t('Cart'), icon: 'cart', badge: count },
+  ]
+
   return (
-    <div className="min-h-screen bg-white">
-      <AppHeader
-        user={user}
-        nav={
-          <nav className="mx-auto flex max-w-7xl overflow-x-auto px-2 sm:px-6" aria-label="Retailer">
-            {TABS.map((t) => tab(t.to, t.label))}
-            <span className="flex-1" />
-            {tab(
-              '/cart',
-              <>
-                Cart
-                <span className={`min-w-6 rounded-full px-1.5 py-0.5 text-center text-xs ${count ? 'bg-mango-400 text-leaf-950' : 'bg-gray-100 text-ink-soft'}`}>
-                  {count}
-                </span>
-              </>,
-            )}
-          </nav>
-        }
-      />
-      <main className="mx-auto max-w-7xl px-4 pb-28 pt-5 sm:px-8">{children}</main>
-    </div>
+    <AppShell
+      user={user}
+      tabs={tabs}
+      status={<LanguageToggle />}
+      menu={[
+        {
+          label: t('Credit details'),
+          to: '/credit',
+          trailing: credit && (
+            <span className={`rounded-md px-2 py-0.5 text-xs font-extrabold ring-1 ${CREDIT_LEVEL_STYLES[creditLevel(credit.available_credit, credit.credit_limit)].pill}`}>
+              {t('{amount} left', { amount: rupees(Math.max(0, Number(credit.available_credit))) })}
+            </span>
+          ),
+        },
+        { label: t('View profile'), to: '/profile' },
+        { label: t('Log out'), onClick: () => signOut(), danger: true },
+      ]}
+    >
+      {children}
+    </AppShell>
   )
 }

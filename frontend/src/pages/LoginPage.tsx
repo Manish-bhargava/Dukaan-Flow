@@ -1,3 +1,5 @@
+import { LanguageToggle } from '../components/LanguageToggle'
+import { t } from '../i18n'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { loginWithPassword, sendOtp, verifyOtp, type TokenData } from '../api/auth'
 import { ApiError } from '../api/client'
@@ -27,18 +29,21 @@ export function LoginPage() {
     <div className="grid min-h-screen bg-cream-50 lg:grid-cols-[1fr_1.1fr]">
       <BrandPanel />
       <div className="flex flex-col px-5 py-6 sm:px-10">
-        <div className="flex items-center justify-between lg:justify-end">
+        <div className="flex items-center justify-between gap-2 lg:justify-end">
           <span className="lg:hidden">
             <Logo />
           </span>
-          <Link to="/" className="rounded-full px-4 py-2 text-sm font-semibold text-ink-soft hover:bg-leaf-50 hover:text-leaf-700">
-            ← Back to home
-          </Link>
+          <span className="flex items-center gap-2">
+            <LanguageToggle />
+            <Link to="/" className="rounded-full px-4 py-2 text-sm font-semibold text-ink-soft hover:bg-leaf-50 hover:text-leaf-700">
+              {t('← Back to home')}
+            </Link>
+          </span>
         </div>
 
         <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center py-10">
-          <h1 className="text-3xl font-extrabold tracking-tight text-leaf-900">Welcome to DukaanFlow</h1>
-          <p className="mt-2 text-ink-soft">Log in with the mobile number registered with your distributor.</p>
+          <h1 className="text-3xl font-extrabold tracking-tight text-leaf-900">{t('Welcome to DukaanFlow')}</h1>
+          <p className="mt-2 text-ink-soft">{t('Log in with the mobile number registered with your distributor.')}</p>
 
           <div className="mt-8 grid grid-cols-2 rounded-full bg-cream-100 p-1 ring-1 ring-cream-200" role="tablist" aria-label="Login type">
             {(['retailer', 'staff'] as const).map((m) => (
@@ -52,7 +57,7 @@ export function LoginPage() {
                   mode === m ? 'bg-leaf-700 text-cream-50 shadow-sm' : 'text-ink-soft hover:text-leaf-700'
                 }`}
               >
-                {m === 'retailer' ? 'Retailer' : 'Staff'}
+                {m === 'retailer' ? t('Retailer') : t('Staff')}
               </button>
             ))}
           </div>
@@ -86,7 +91,7 @@ function RetailerOtpLogin({ onSignedIn }: { onSignedIn: (data: TokenData) => voi
 
   async function requestOtp() {
     if (!PHONE_PATTERN.test(phone)) {
-      setAlert({ tone: 'error', text: 'Enter a valid 10-digit mobile number.' })
+      setAlert({ tone: 'error', text: t('Enter a valid 10-digit mobile number.') })
       return
     }
     setBusy(true)
@@ -145,7 +150,7 @@ function RetailerOtpLogin({ onSignedIn }: { onSignedIn: (data: TokenData) => voi
         <PhoneField value={phone} onChange={setPhone} autoFocus />
         <p className="mt-3 text-sm text-ink-soft">We’ll email a 6-digit code to the email address registered on your account.</p>
         <AlertBox alert={alert} />
-        <SubmitButton busy={busy}>Send OTP</SubmitButton>
+        <SubmitButton busy={busy}>{t('Send OTP')}</SubmitButton>
       </form>
     )
   }
@@ -160,7 +165,7 @@ function RetailerOtpLogin({ onSignedIn }: { onSignedIn: (data: TokenData) => voi
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-ink-soft">Code sent for</p>
+          <p className="text-sm font-semibold text-ink-soft">{t('Code sent for')}</p>
           <p className="text-lg font-bold text-leaf-900">+91 {phone.slice(0, 5)} {phone.slice(5)}</p>
         </div>
         <button
@@ -171,12 +176,12 @@ function RetailerOtpLogin({ onSignedIn }: { onSignedIn: (data: TokenData) => voi
           }}
           className="rounded-full px-3 py-1.5 text-sm font-bold text-leaf-700 hover:bg-leaf-50"
         >
-          Change number
+          {t('Change number')}
         </button>
       </div>
 
       <label htmlFor="otp" className="mt-6 block text-sm font-bold text-leaf-900">
-        Enter the 6-digit OTP from your email
+        {t('Enter the 6-digit OTP from your email')}
       </label>
       <input
         ref={otpInput}
@@ -197,7 +202,7 @@ function RetailerOtpLogin({ onSignedIn }: { onSignedIn: (data: TokenData) => voi
 
       <div className="mt-3 flex items-center justify-between text-sm">
         <span className={expired ? 'font-semibold text-red-700' : 'text-ink-soft'}>
-          {expired ? 'This code is no longer valid' : `Code expires in ${formatSeconds(secondsLeft)}`}
+          {expired ? t('This code is no longer valid') : t('Code expires in {time}', { time: formatSeconds(secondsLeft) })}
         </span>
         <button
           type="button"
@@ -205,15 +210,15 @@ function RetailerOtpLogin({ onSignedIn }: { onSignedIn: (data: TokenData) => voi
           onClick={() => void requestOtp()}
           className="font-bold text-leaf-700 hover:underline disabled:cursor-not-allowed disabled:text-ink-soft/60 disabled:no-underline"
         >
-          {resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend OTP'}
+          {resendIn > 0 ? t('Resend in {n}s', { n: resendIn }) : t('Resend OTP')}
         </button>
       </div>
 
       <AlertBox alert={alert} />
       <SubmitButton busy={busy} disabled={otp.length !== 6 || expired}>
-        Verify & log in
+        {t('Verify & log in')}
       </SubmitButton>
-      <p className="mt-4 text-center text-xs text-ink-soft">Didn’t get it? Check your spam folder. A new code replaces the old one.</p>
+      <p className="mt-4 text-center text-xs text-ink-soft">{t('Didn’t get it? Check your spam folder. A new code replaces the old one.')}</p>
     </form>
   )
 }
@@ -265,7 +270,7 @@ function PhoneField({ value, onChange, autoFocus }: { value: string; onChange: (
   return (
     <>
       <label htmlFor="phone" className="block text-sm font-bold text-leaf-900">
-        Mobile number
+        {t('Mobile number')}
       </label>
       <div className="mt-2 flex rounded-2xl bg-cream-50 ring-1 ring-cream-300 transition focus-within:ring-2 focus-within:ring-leaf-500">
         <span className="flex items-center border-r border-cream-300 px-4 font-bold text-ink-soft">+91</span>
@@ -294,7 +299,7 @@ function SubmitButton({ busy, disabled, children }: { busy: boolean; disabled?: 
       className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-leaf-700 py-4 font-bold text-cream-50 shadow-md shadow-leaf-900/15 transition hover:bg-leaf-800 disabled:cursor-not-allowed disabled:bg-leaf-700/50 disabled:shadow-none"
     >
       {busy && <Spinner />}
-      {busy ? 'Please wait…' : children}
+      {busy ? t('Please wait…') : children}
     </button>
   )
 }

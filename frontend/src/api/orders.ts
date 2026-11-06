@@ -1,7 +1,7 @@
-import { apiDownload, apiRequest } from './client'
+import { apiRequest } from './client'
 
 /** Money and quantities arrive as decimal strings; they are displayed, never recalculated. */
-export type OrderStatus = 'PENDING' | 'CREDIT_HOLD' | 'ON_HOLD' | 'APPROVED' | 'REJECTED'
+export type OrderStatus = 'PENDING' | 'CREDIT_HOLD' | 'ON_HOLD' | 'CLARIFICATION_REQUIRED' | 'APPROVED' | 'REJECTED'
 export type OrderSource = 'MANUAL' | 'AI' | 'SALESMAN'
 
 export interface CartItemInput {
@@ -51,7 +51,10 @@ export interface QuoteLine {
 export interface Quote {
   lines: QuoteLine[]
   totals: Totals
-  can_order: boolean
+  can_order: boolean // all lines in stock
+  available_credit: string
+  within_credit: boolean // retailers cannot place the order when false
+  ordering_restricted_reason?: string | null // the Admin paused ordering for this shop
 }
 
 export interface Correction {
@@ -94,8 +97,15 @@ export interface Order extends Totals {
   remarks: string | null
   hold_reason: string | null
   rejection_reason: string | null
+  clarification_message: string | null
   created_at: string
   approved_at: string | null
+  approved_by: { id: string; name: string; role: string } | null
+  tally_exported_at: string | null
+  created_by: { id: string; name: string; role: string }
+  created_offline: boolean
+  client_created_at: string | null
+  client_order_id: string | null
   ai: { extraction_id: string; original_message: string } | null
   items: OrderItem[]
 }
@@ -109,6 +119,8 @@ export interface OrderSummary {
   item_count: number
   grand_total: string
   created_at: string
+  created_offline: boolean
+  client_order_id: string | null
 }
 
 export interface OrderPage {
@@ -118,17 +130,17 @@ export interface OrderPage {
   total: number
 }
 
-export const quoteCart = (token: string, items: CartItemInput[], signal?: AbortSignal) =>
-  apiRequest<Quote>('/orders/quote', { method: 'POST', token, body: { items }, signal })
+export const quoteCart = (token: string, items: CartItemInput[], signal?: AbortSignal, retailerId?: string) =>
+  apiRequest<Quote>('/orders/quote', { method: 'POST', token, body: { items, retailer_id: retailerId ?? null }, signal })
 
 export const placeOrder = (token: string, items: CartItemInput[], remarks?: string) =>
   apiRequest<Order>('/orders', { method: 'POST', token, body: { items, remarks: remarks || null } })
 
 export const listOrders = (
   token: string,
-  params: { status?: OrderStatus[]; source?: OrderSource; search?: string; page?: number; limit?: number },
+  params: { status?: OrderStatus[]; source?: OrderSource; search?: string; page?: number; limit?: number; created_by_me?: boolean; retailer_id?: string },
   signal?: AbortSignal,
-) => apiRequest<OrderPage>('/orders', { token, params, signal })
+) => apiRequest<OrderPage>('/orders', { token, params: { ...params, created_by_me: params.created_by_me ? 'true' : undefined }, signal })
 
 export const getOrder = (token: string, id: string, signal?: AbortSignal) =>
   apiRequest<Order>(`/orders/${id}`, { token, signal })
@@ -140,21 +152,16 @@ export const correctOrderItem = (
   body: { new_product_id?: string; new_quantity?: number; unit?: string; reason?: string },
 ) => apiRequest<Order>(`/orders/${orderId}/items/${itemId}`, { method: 'PATCH', token, body })
 
-export const holdOrder = (token: string, id: string, reason: string) =>
-  apiRequest<Order>(`/orders/${id}/hold`, { method: 'POST', token, body: { reason } })
-
-export const approveOrder = (token: string, id: string, creditOverrideReason?: string) =>
+export const approveOrder = (token: string, id: string, creditOverrideReason?: string, acknowledgeChanges = false) =>
   apiRequest<Order>(`/orders/${id}/approve`, {
     method: 'POST',
     token,
-    body: { credit_override_reason: creditOverrideReason || null },
+    body: { credit_override_reason: creditOverrideReason || null, acknowledge_changes: acknowledgeChanges },
   })
 
-export const rejectOrder = (token: string, id: string, reason: string) =>
-  apiRequest<Order>(`/orders/${id}/reject`, { method: 'POST', token, body: { reason } })
+export const requestClarification = (token: string, id: string, message: string) =>
+  apiRequest<Order>(`/orders/${id}/clarification`, { method: 'POST', token, body: { message } })
 
-export const fetchDeskSummary = (token: string, signal?: AbortSignal) =>
-  apiRequest<Record<OrderStatus, number>>('/order-desk/summary', { token, signal })
+export const rejectOrder = (token: string, id: string, reason?: string) =>
+  apiRequest<Order>(`/orders/${id}/reject`, { method: 'POST', token, body: { reason: reason ?? null } })
 
-export const downloadTallyCsv = (token: string, fromDate?: string, toDate?: string) =>
-  apiDownload('/exports/tally/orders.csv', token, { from_date: fromDate, to_date: toDate })

@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
 
 /** Standard success envelope (docs/API_DESIGN.MD). */
 export interface ApiResponse<T> {
@@ -23,7 +23,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH'
+  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   body?: unknown
   token?: string | null
   params?: Record<string, string | number | string[] | undefined>
@@ -72,20 +72,23 @@ export async function apiDownload(
   path: string,
   token: string,
   params: Record<string, string | undefined> = {},
-): Promise<{ blob: Blob; filename: string }> {
+  body?: unknown,
+): Promise<{ blob: Blob; filename: string; headers: Headers }> {
   const url = new URL(`${API_BASE_URL}${path}`)
   for (const [key, value] of Object.entries(params)) if (value) url.searchParams.set(key, value)
   let response: Response
   try {
-    response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    response = await fetch(url, body === undefined
+      ? { headers: { Authorization: `Bearer ${token}` } }
+      : { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   } catch {
     throw new ApiError('Cannot reach the DukaanFlow server. Check your connection and try again.', 0, 'NETWORK_ERROR')
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
-    throw new ApiError(payload?.message ?? `Download failed (HTTP ${response.status})`, response.status, payload?.error_code ?? 'UNKNOWN_ERROR')
+    throw new ApiError(payload?.message ?? `Download failed (HTTP ${response.status})`, response.status, payload?.error_code ?? 'UNKNOWN_ERROR', payload?.details ?? {})
   }
   const disposition = response.headers.get('content-disposition') ?? ''
   const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? 'download.csv'
-  return { blob: await response.blob(), filename }
+  return { blob: await response.blob(), filename, headers: response.headers }
 }

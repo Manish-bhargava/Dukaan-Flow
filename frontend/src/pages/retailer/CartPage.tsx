@@ -1,5 +1,7 @@
+import { t } from '../../i18n'
 import { useEffect, useState, type ReactNode } from 'react'
 import { confirmExtraction } from '../../api/aiOrders'
+import { fetchMyProfile } from '../../api/retailers'
 import { placeOrder, quoteCart, type CartItemInput, type QuoteLine, type Totals } from '../../api/orders'
 import { useErrorMessage, useLoad, useToken } from '../../auth/useApi'
 import { useCart, type CartLine } from '../../cart/CartContext'
@@ -35,11 +37,11 @@ export function CartPage() {
   if (cart.lines.length === 0) {
     return (
       <>
-        <h1 className="text-xl font-extrabold text-ink">Cart</h1>
+        <h1 className="text-xl font-extrabold text-ink">{t('Cart')}</h1>
         <div className="mt-4">
-          <Empty title="Your cart is empty">
-            Add products from the <Link to="/home" className="font-bold text-leaf-700 underline">catalogue</Link> or{' '}
-            <Link to="/ai-order" className="font-bold text-leaf-700 underline">type your order as a message</Link>.
+          <Empty title={t('Your cart is empty')}>
+            {t('Add products from the')} <Link to="/home" className="font-bold text-leaf-700 underline">{t('catalogue')}</Link> {t('or')}{' '}
+            <Link to="/ai-order" className="font-bold text-leaf-700 underline">{t('type your order as a message')}</Link>.
           </Empty>
         </div>
       </>
@@ -67,12 +69,12 @@ export function CartPage() {
   return (
     <>
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-extrabold text-ink">Cart</h1>
+        <h1 className="text-xl font-extrabold text-ink">{t('Cart')}</h1>
         <button type="button" onClick={cart.clear} className="min-h-11 px-2 text-sm font-bold text-red-700">
-          Empty cart
+          {t('Empty cart')}
         </button>
       </div>
-      {cart.ai && <p className="mt-1 text-sm text-ink-soft">Includes items read from your message.</p>}
+      {cart.ai && <p className="mt-1 text-sm text-ink-soft">{t('Includes items read from your message.')}</p>}
 
       <div className="mt-4 grid gap-6 lg:grid-cols-[1fr_360px]">
         <ul className="divide-y divide-gray-200 border-y border-gray-200">
@@ -82,7 +84,7 @@ export function CartPage() {
         </ul>
 
         <aside className="h-fit rounded-xl border border-gray-200 p-4 lg:sticky lg:top-32">
-          <h2 className="font-extrabold text-ink">Order summary</h2>
+          <h2 className="font-extrabold text-ink">{t('Order summary')}</h2>
           {quote.state.status === 'error' ? (
             <div className="mt-3">
               <ErrorBox message={quote.state.message} onRetry={quote.reload} />
@@ -90,15 +92,25 @@ export function CartPage() {
           ) : priced ? (
             <TotalsTable totals={priced.totals} faded={!upToDate} />
           ) : (
-            <p className="mt-3 text-sm text-ink-soft">Calculating…</p>
+            <p className="mt-3 text-sm text-ink-soft">{t('Calculating…')}</p>
+          )}
+          {priced?.ordering_restricted_reason && upToDate && (
+            <div className="mt-3">
+              <Notice tone="warn">{t('Ordering is paused for your shop: {reason}. Please contact your salesman or the distributor.', { reason: priced.ordering_restricted_reason })}</Notice>
+            </div>
+          )}
+          {priced && !priced.within_credit && upToDate && (
+            <div className="mt-3">
+              <CreditNotice available={priced.available_credit} total={priced.totals.grand_total} />
+            </div>
           )}
           {priced && !priced.can_order && upToDate && (
             <div className="mt-3">
-              <Notice tone="warn">Some items are not available in the quantity you want. Reduce or remove them to place the order.</Notice>
+              <Notice tone="warn">{t('Some items are not available in the quantity you want. Reduce or remove them to place the order.')}</Notice>
             </div>
           )}
           <label htmlFor="remarks" className="mt-4 block text-sm font-bold text-ink">
-            Note for the distributor (optional)
+            {t('Note for the distributor (optional)')}
           </label>
           <textarea
             id="remarks"
@@ -107,20 +119,37 @@ export function CartPage() {
             value={remarks}
             onChange={(e) => setRemarks(e.target.value)}
             className="mt-1 w-full rounded-lg border border-gray-300 p-2 text-base outline-none focus:border-leaf-600"
-            placeholder="e.g. Deliver before 10 am"
+            placeholder={t('e.g. Deliver before 10 am')}
           />
           {placeError && (
             <div className="mt-3">
               <ErrorBox message={placeError} />
             </div>
           )}
-          <Button className="mt-3 w-full" busy={placing} disabled={!upToDate || !priced?.can_order} onClick={place}>
-            Place order{priced && upToDate ? ` · ${rupees(priced.totals.grand_total)}` : ''}
+          <Button className="mt-3 w-full" busy={placing} disabled={!upToDate || !priced?.can_order || !priced?.within_credit || Boolean(priced?.ordering_restricted_reason)} onClick={place}>
+            {t('Place order')}{priced && upToDate ? ` · ${rupees(priced.totals.grand_total)}` : ''}
           </Button>
-          <p className="mt-2 text-xs text-ink-soft">Prices, schemes and GST are calculated by DukaanFlow and checked again when you place the order. No payment is taken now.</p>
+          <p className="mt-2 text-xs text-ink-soft">{t('Prices, schemes and GST are calculated by DukaanFlow and checked again when you place the order. No payment is taken now.')}</p>
         </aside>
       </div>
     </>
+  )
+}
+
+/** Shown when the cart total is above the retailer's available credit (checked again by the backend). */
+function CreditNotice({ available, total }: { available: string; total: string }) {
+  const profile = useLoad((t, s) => fetchMyProfile(t, s), 'cart-profile')
+  const salesman = profile.state.status === 'ready' ? profile.state.data.assigned_salesman : null
+  const reached = Number(available) <= 0
+  return (
+    <Notice tone="warn">
+      <p className="font-bold">{reached ? t('Your credit limit has been reached.') : t('This order is more than your available credit.')}</p>
+      <p className="mt-1">
+        {reached ? t('New orders cannot be placed right now.') : t('Available credit: {available}. Order total: {total}. Reduce the order to fit, or', { available: rupees(available), total: rupees(total) })}{' '}
+        {reached ? t('Please') : ''} {t('contact')} {salesman ? <>{t('your salesman')} <b>{salesman.name}</b> (<a href={`tel:+91${salesman.phone}`} className="font-bold underline">+91 {salesman.phone}</a>) or </> : ''}
+        {t('the distributor’s order desk.')}
+      </p>
+    </Notice>
   )
 }
 
@@ -146,29 +175,29 @@ function CartRow({ line, priced, stale, onChange }: { line: CartLine; priced?: Q
       <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
         <QtyStepper label={line.name} value={line.quantity} onChange={onChange} />
         <button type="button" onClick={() => onChange(0)} className="min-h-11 px-2 text-sm font-bold text-ink-soft hover:text-red-700">
-          Remove
+          {t('Remove')}
         </button>
       </div>
       {priced && (
         <dl className={`mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4 ${stale ? 'opacity-50' : ''}`}>
-          <Field label="Rate">
-            {rupees(priced.unit_price)} / {priced.price_basis === 'PIECE' ? 'piece' : priced.order_unit}
+          <Field label={t('Rate')}>
+            {rupees(priced.unit_price)} / {t(priced.price_basis === 'PIECE' ? 'piece' : priced.order_unit)}
           </Field>
-          <Field label="GST">{gstLabel(priced.gst_rate, priced.tax_inclusive)}</Field>
-          <Field label="Discount">{Number(priced.discount_amount) > 0 ? `${qty(priced.discount_percentage)}% · −${rupees(priced.discount_amount)}` : '—'}</Field>
-          <Field label="Free">{Number(priced.free_quantity) > 0 ? plural(priced.free_quantity, priced.order_unit) : '—'}</Field>
+          <Field label={t('GST')}>{gstLabel(priced.gst_rate, priced.tax_inclusive)}</Field>
+          <Field label={t('Discount')}>{Number(priced.discount_amount) > 0 ? `${qty(priced.discount_percentage)}% · −${rupees(priced.discount_amount)}` : '—'}</Field>
+          <Field label={t('Free')}>{Number(priced.free_quantity) > 0 ? plural(priced.free_quantity, priced.order_unit) : '—'}</Field>
         </dl>
       )}
       {priced?.scheme && (
         <p className="mt-2 text-sm font-bold text-mango-600">
-          Scheme applied: {priced.scheme.description}
-          {Number(priced.free_quantity) > 0 && ` · you get ${plural(Number(priced.quantity) + Number(priced.free_quantity), priced.order_unit)}`}
+          {t('Scheme applied: {scheme}', { scheme: priced.scheme.description })}
+          {Number(priced.free_quantity) > 0 && t(' · you get {n}', { n: plural(Number(priced.quantity) + Number(priced.free_quantity), priced.order_unit) })}
         </p>
       )}
       {priced && !priced.stock_ok && !stale && (
         <p className="mt-2 text-sm font-bold text-red-700">
-          Only {plural(priced.available_stock, priced.order_unit)} available
-          {Number(priced.free_quantity) > 0 ? ' (free cases count too)' : ''}.
+          {t('Only {n} available', { n: plural(priced.available_stock, priced.order_unit) })}
+          {Number(priced.free_quantity) > 0 ? t(' (free cases count too)') : ''}.
         </p>
       )}
     </li>
@@ -186,10 +215,10 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 export function TotalsTable({ totals, faded = false }: { totals: Totals; faded?: boolean }) {
   const rows: [string, string][] = [
-    ['Value before discount', rupees(totals.subtotal)],
-    ['Scheme discount', Number(totals.discount_total) > 0 ? `−${rupees(totals.discount_total)}` : rupees(0)],
-    ['Taxable value', rupees(totals.taxable_amount)],
-    ['GST', rupees(totals.gst_amount)],
+    [t('Value before discount'), rupees(totals.subtotal)],
+    [t('Scheme discount'), Number(totals.discount_total) > 0 ? `−${rupees(totals.discount_total)}` : rupees(0)],
+    [t('Taxable value'), rupees(totals.taxable_amount)],
+    [t('GST'), rupees(totals.gst_amount)],
   ]
   return (
     <dl className={`mt-3 space-y-1.5 text-sm ${faded ? 'opacity-50' : ''}`}>
@@ -200,7 +229,7 @@ export function TotalsTable({ totals, faded = false }: { totals: Totals; faded?:
         </div>
       ))}
       <div className="flex justify-between border-t border-gray-200 pt-2 text-base">
-        <dt className="font-extrabold text-ink">Order total</dt>
+        <dt className="font-extrabold text-ink">{t('Order total')}</dt>
         <dd className="font-extrabold text-ink">{rupees(totals.grand_total)}</dd>
       </div>
     </dl>
