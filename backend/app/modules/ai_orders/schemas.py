@@ -1,8 +1,11 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from app.core.constants import AiInputType
 
 
 class ExtractedItemInput(BaseModel):
@@ -16,12 +19,15 @@ class ExtractedItemInput(BaseModel):
     matched_product_id: uuid.UUID | None = None
     confidence: Decimal = Field(default=Decimal("0"), ge=0, le=1, max_digits=4, decimal_places=3)
     alternatives: list[dict[str, Any]] | None = None
+    evidence: list[str] | None = None  # business evidence for the match (shown to people)
+    clarification_reason: str | None = None
     requires_clarification: bool = False
 
 
 class RecordExtractionInput(BaseModel):
     retailer_id: uuid.UUID | None = None
     original_message: str = Field(min_length=1)
+    input_type: AiInputType = AiInputType.TEXT
     model_name: str | None = Field(default=None, max_length=100)
     raw_response: dict[str, Any] | None = None
     items: list[ExtractedItemInput]
@@ -69,11 +75,21 @@ class ExtractionItemOut(BaseModel):
     alternatives: list[dict[str, Any]]
     requires_clarification: bool
     clarification: str | None  # why the user must check this line
+    evidence: list[str]  # why this product was chosen (business evidence, not model reasoning)
+
+
+class DraftSummaryOut(BaseModel):
+    extraction_id: uuid.UUID
+    created_at: datetime
+    original_message: str
+    item_count: int
+    needs_clarification: bool  # some line needs the retailer's input before it can be placed
 
 
 class ExtractionOut(BaseModel):
     extraction_id: uuid.UUID
     status: str
+    input_type: str
     original_message: str
     model_name: str | None
     items: list[ExtractionItemOut]

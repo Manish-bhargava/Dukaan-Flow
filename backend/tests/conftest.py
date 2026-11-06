@@ -7,6 +7,12 @@ They are skipped if PostgreSQL is not reachable.
 from collections.abc import Generator
 from pathlib import Path
 
+import os
+
+# Before anything imports deepeval: no .env loading, no telemetry (see pytest.ini).
+os.environ.setdefault("DEEPEVAL_DISABLE_DOTENV", "1")
+os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "YES")
+
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -160,3 +166,24 @@ def _never_send_real_email(monkeypatch):
     for name in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET"):
         monkeypatch.setattr(app_settings, name, None)
     monkeypatch.setattr(images_module, "_http_client", lambda: httpx.Client(transport=httpx.MockTransport(refuse)))
+
+
+def place_open_order(session: Session, user_key: str, *lines, retailer_id=None):
+    """Place an order that waits for the Order Desk (as AI-captured orders do), through the
+    real pricing/stock/credit path. `lines` are (product_id, cases). Catalogue orders are
+    confirmed at placement, so tests of review/correction/approval use this."""
+    from decimal import Decimal
+
+    from app.core.constants import OrderSource
+    from app.modules.orders import service as orders
+    from app.modules.orders.schemas import OrderItemInput
+
+    actor = seed_user(session, user_key)
+    retailer = orders.resolve_ordering_retailer(session, actor, retailer_id)
+    order = orders.build_order(
+        session, actor, retailer,
+        [OrderItemInput(product_id=p, quantity=Decimal(q), unit="case") for p, q in lines],
+        source=OrderSource.AI,
+    )
+    session.commit()
+    return order

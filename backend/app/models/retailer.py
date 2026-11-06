@@ -30,6 +30,8 @@ class Retailer(Base):
         ForeignKey("users.id", use_alter=True), index=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # Set by the Admin to stop new orders (retailer, salesman and AI) until removed.
+    ordering_restricted_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = created_at_column()
 
     users: Mapped[list["User"]] = relationship(

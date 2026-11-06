@@ -151,6 +151,10 @@ def upload_product_image(
         stored = images.upload(content, content_type or "", public_id)
         product.image_url = stored.secure_url
         product.image_public_id = stored.public_id
+        from app.modules.audit.service import record
+
+        record(db, actor, "PRODUCT_IMAGE_CHANGED", "product", product.id, f"{product.name} ({product.sku})",
+               {"image_public_id": stored.public_id})
         db.commit()
     except Exception:
         db.rollback()

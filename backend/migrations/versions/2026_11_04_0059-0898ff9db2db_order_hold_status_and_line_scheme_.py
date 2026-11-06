@@ -74,7 +74,9 @@ def downgrade() -> None:
     op.drop_column("order_items", "scheme_snapshot")
     op.drop_column("order_items", "scheme_id")
     op.drop_column("order_items", "tax_inclusive")
-    # Fails if any order is ON_HOLD: release or reject those orders first.
+    # ON_HOLD does not exist before this revision: such orders go back to PENDING (open,
+    # awaiting the Order Desk), which is what they were before being held.
+    op.execute("UPDATE orders SET status = 'PENDING' WHERE status = 'ON_HOLD'")
     op.drop_constraint(op.f("ck_orders_status_valid"), "orders", type_="check")
     op.create_check_constraint(op.f("ck_orders_status_valid"), "orders", f"status IN ({OLD_STATUSES})")
     op.drop_column("orders", "hold_reason")

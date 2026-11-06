@@ -3,12 +3,13 @@
 Everything goes through the real services (pricing, schemes, stock/credit checks, row
 locks, audit records), so the data obeys the same rules as the application:
 
-  DF-DEMO-0001  Gupta, MANUAL           -> APPROVED by Order Desk (3 days ago): stock deducted,
-                                           stock movements + ORDER_DEBIT ledger entry
+  DF-DEMO-0001  Gupta, MANUAL           -> APPROVED at placement (3 days ago; catalogue orders need
+                                           no desk review): stock deducted, movements + ORDER_DEBIT
   DF-DEMO-0002  Sharma, AI (Hinglish)    -> confirmed by retailer, then corrected by Order Desk
                                            (order_corrections row), awaiting review: PENDING
   DF-DEMO-0003  Patel via salesman       -> over available credit: CREDIT_HOLD
-  DF-DEMO-0004  Jain via salesman        -> REJECTED with reason (20 days ago; Jain is now inactive)
+  DF-DEMO-0004  Jain, AI via salesman    -> REJECTED by Order Desk with reason (20 days ago; Jain is
+                                           now inactive)
   Gupta AI extraction                    -> not confirmed yet: PENDING, one unclear line, no order
   Gupta payment ₹10,000                  -> PAYMENT_CREDIT ledger entry, outstanding reduced
   Detergent Powder 500g restock +40      -> RESTOCK stock movement, inventory increased
@@ -25,7 +26,7 @@ from decimal import Decimal
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models import CreditAccount, CreditLedger, Inventory, Order, StockMovement, User
+from app.models import CreditAccount, CreditLedger, Inventory, Order, OrderEvent, StockMovement, User
 from app.modules.ai_orders import service as ai_orders
 from app.modules.ai_orders.schemas import (
     ConfirmedItemInput,
@@ -62,12 +63,17 @@ def _number(session: Session, order: Order, n: int) -> Order:
 def _backdate(session: Session, order: Order, days: int, approved_after: timedelta | None = None) -> None:
     created = datetime.now(UTC) - timedelta(days=days)
     values = {"created_at": created, "updated_at": created}
+    # Its history moves with it (confirmation at approved_at).
+    session.execute(update(OrderEvent).where(OrderEvent.order_id == order.id)
+                    .values(created_at=OrderEvent.created_at + (created - order.created_at)))
     if approved_after is not None:
         values["approved_at"] = created + approved_after
         for model in (StockMovement, CreditLedger):
             session.execute(
                 update(model).where(model.order_id == order.id).values(created_at=values["approved_at"])
             )
+        session.execute(update(OrderEvent).where(OrderEvent.order_id == order.id, OrderEvent.action == "CONFIRMED")
+                        .values(created_at=values["approved_at"]))
     session.execute(update(Order).where(Order.id == order.id).values(**values))
 
 
@@ -83,14 +89,14 @@ def run_demo_activity(session: Session) -> dict[str, str] | None:
     sharma = _user(session, "retailer_sharma")
     gupta = _user(session, "retailer_gupta")
 
-    # 1. Manual order, approved by Order Desk.
+    # 1. Manual catalogue order, accepted by the Order Desk.
     o1 = orders.create_order(session, gupta, CreateOrderInput(
         items=[_cases("SKU-BS-075", 10), _cases("SKU-DB-150", 5)],
         remarks="Deliver before 10 am",
     ))
     _number(session, o1, 1)
     orders.approve_order(session, desk, o1.id)
-    _backdate(session, o1, days=3, approved_after=timedelta(hours=2))
+    _backdate(session, o1, days=3, approved_after=timedelta(seconds=1))
 
     # 2. AI order: extraction -> retailer confirmation -> Order Desk correction.
     extraction = ai_orders.record_extraction(session, sharma, RecordExtractionInput(
@@ -139,9 +145,19 @@ def run_demo_activity(session: Session) -> dict[str, str] | None:
     ))
     _number(session, o3, 3)
 
-    # 4. Salesman order rejected by Order Desk, 20 days ago.
-    o4 = orders.create_order(session, sunil, CreateOrderInput(
-        retailer_id=seed_id("retailer", "jain"), items=[_cases("SKU-NS-070", 20)],
+    # 4. AI order captured by the salesman for Jain, rejected by Order Desk, 20 days ago.
+    jain_extraction = ai_orders.record_extraction(session, sunil, RecordExtractionInput(
+        retailer_id=seed_id("retailer", "jain"),
+        original_message="Jain ji ke liye 20 peti noodles",
+        model_name="demo-seed (no LLM call)",
+        items=[ExtractedItemInput(
+            original_text="20 peti noodles", extracted_name="instant noodles 70g", quantity=Decimal(20),
+            unit="case", matched_product_id=_product("SKU-NS-070"), confidence=Decimal("0.900"),
+        )],
+    ))
+    o4 = ai_orders.confirm_extraction(session, sunil, jain_extraction.id, ConfirmExtractionInput(
+        items=[ConfirmedItemInput(extraction_item_id=jain_extraction.items[0].id,
+                                  product_id=_product("SKU-NS-070"), quantity=Decimal(20), unit="case")],
     ))
     _number(session, o4, 4)
     orders.reject_order(session, desk, o4.id, "Duplicate of the order already taken by phone")

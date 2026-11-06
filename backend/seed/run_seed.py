@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.models import (
+    Brand,
     Category,
     CreditAccount,
     CreditLedger,
@@ -93,6 +94,7 @@ def run_seed(session: Session) -> dict[str, tuple[int, int]]:
         for key, (name, phone, email, retailer_key) in d.RETAILER_USERS.items()
     ]))
     plan.append((Category, [{"id": seed_id("category", n), "name": n} for n in d.CATEGORIES]))
+    plan.append((Brand, [{"id": seed_id("brand", b), "name": b} for b in sorted({p[2] for p in d.PRODUCTS})]))
     plan.append((Product, [
         {
             "id": product_ids[sku],
@@ -121,6 +123,21 @@ def run_seed(session: Session) -> dict[str, tuple[int, int]]:
             "effective_to": None,
         }
         for key, r in d.RETAILERS.items()
+        for sku, _n, _b, _c, _p, _u, base_price, _s, _g in d.PRODUCTS
+    ]
+    # Default price of every product (the sample dealer price): what retailers without their
+    # own price pay, e.g. shops added later by the Admin.
+    price_rows += [
+        {
+            "id": seed_id("price", "default", sku),
+            "retailer_id": None,
+            "product_id": product_ids[sku],
+            "dealer_price": Decimal(base_price),
+            "price_basis": d.DEMO_PRICE_BASIS,
+            "tax_inclusive": d.DEMO_TAX_INCLUSIVE,
+            "effective_from": d.PRICE_EFFECTIVE_FROM,
+            "effective_to": None,
+        }
         for sku, _n, _b, _c, _p, _u, base_price, _s, _g in d.PRODUCTS
     ]
     price_rows += [

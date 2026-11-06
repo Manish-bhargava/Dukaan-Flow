@@ -8,7 +8,10 @@ from app.models import Order, OrderItem, User
 from app.modules.orders import service
 from app.modules.orders.schemas import (
     AiSourceOut,
+    CreatorOut,
     ApproveOrderInput,
+    RejectInput,
+    ClarificationInput,
     CorrectionOut,
     CorrectOrderItemInput,
     CreateOrderInput,
@@ -60,6 +63,10 @@ def _item_out(item: OrderItem) -> OrderItemOut:
     )
 
 
+def _person(user: User | None) -> CreatorOut | None:
+    return CreatorOut(id=user.id, name=user.name, role=user.role) if user else None
+
+
 def order_out(order: Order) -> OrderOut:
     r = order.retailer
     ai = order.ai_extraction
@@ -69,7 +76,12 @@ def order_out(order: Order) -> OrderOut:
         retailer=RetailerDetailOut(id=r.id, shop_name=r.shop_name, city=r.city, owner_name=r.owner_name,
                                    phone=r.phone, address=r.address, gstin=r.gstin),
         remarks=order.remarks, hold_reason=order.hold_reason, rejection_reason=order.rejection_reason,
+        clarification_message=order.clarification_message,
         created_at=order.created_at, approved_at=order.approved_at,
+        approved_by=_person(order.approver), tally_exported_at=order.tally_exported_at,
+        created_by=_person(order.creator),
+        created_offline=order.created_offline, client_created_at=order.client_created_at,
+        client_order_id=order.client_order_id,
         ai=AiSourceOut(extraction_id=ai.id, original_message=ai.original_message) if ai else None,
         items=[_item_out(i) for i in order.items],
     )
@@ -81,6 +93,7 @@ def _summary_out(order: Order) -> OrderSummaryOut:
         id=order.id, order_number=order.order_number, status=order.status, source=order.source,
         retailer=RetailerBriefOut(id=r.id, shop_name=r.shop_name, city=r.city),
         item_count=len(order.items), grand_total=order.grand_total, created_at=order.created_at,
+        created_offline=order.created_offline, client_order_id=order.client_order_id,
     )
 
 
@@ -100,7 +113,10 @@ def quote(db: Session, user: User, data: CreateOrderInput) -> dict:
             available_stock=q.available_stock, stock_ok=q.stock_ok,
         ))
     return success_response(
-        "Cart priced", QuoteOut(lines=lines, totals=_totals(result.totals), can_order=result.can_order)
+        "Cart priced",
+        QuoteOut(lines=lines, totals=_totals(result.totals), can_order=result.can_order,
+                 available_credit=result.available_credit, within_credit=result.within_credit,
+                 ordering_restricted_reason=result.ordering_restricted_reason),
     )
 
 
@@ -111,10 +127,11 @@ def create(db: Session, user: User, data: CreateOrderInput) -> dict:
 
 def list_orders(
     db: Session, user: User, statuses: list[OrderStatus], source: OrderSource | None,
-    search: str | None, page: int, limit: int,
+    search: str | None, page: int, limit: int, created_by_me: bool = False, retailer_id: uuid.UUID | None = None,
 ) -> dict:
     orders, total = service.search_orders(
-        db, user, statuses=statuses, source=source, search=search, page=page, limit=limit
+        db, user, statuses=statuses, source=source, search=search, page=page, limit=limit,
+        created_by_me=created_by_me, retailer_id=retailer_id,
     )
     return success_response(
         "Orders fetched", OrderPageOut(items=[_summary_out(o) for o in orders], page=page, limit=limit, total=total)
@@ -135,13 +152,15 @@ def hold(db: Session, user: User, order_id: uuid.UUID, data: StatusReasonInput) 
 
 
 def approve(db: Session, user: User, order_id: uuid.UUID, data: ApproveOrderInput) -> dict:
-    order = service.approve_order(db, user, order_id, data.credit_override_reason)
+    order = service.approve_order(db, user, order_id, data.credit_override_reason, data.acknowledge_changes)
     return success_response("Order confirmed", order_out(order))
 
 
-def reject(db: Session, user: User, order_id: uuid.UUID, data: StatusReasonInput) -> dict:
-    return success_response("Order rejected", order_out(service.reject_order(db, user, order_id, data.reason)))
+def request_clarification(db: Session, user: User, order_id: uuid.UUID, data: ClarificationInput) -> dict:
+    order = service.request_clarification(db, user, order_id, data.message)
+    return success_response("Clarification requested", order_out(order))
 
 
-def summary(db: Session, user: User) -> dict:
-    return success_response("Order counts", service.status_counts(db, user))
+def reject(db: Session, user: User, order_id: uuid.UUID, data: RejectInput | None) -> dict:
+    reason = data.reason if data else None
+    return success_response("Order rejected", order_out(service.reject_order(db, user, order_id, reason)))

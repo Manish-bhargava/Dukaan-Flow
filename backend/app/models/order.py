@@ -3,11 +3,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text, false
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.constants import OrderSource, OrderStatus, PriceBasis
+from app.core.constants import OrderEventAction, OrderSource, OrderStatus, PriceBasis
 from app.database.base import (
     Base,
     created_at_column,
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from app.models.ai_order import AiExtraction
     from app.models.catalog import Product
     from app.models.retailer import Retailer
+    from app.models.user import User
 
 MONEY = Numeric(14, 2)
 
@@ -55,6 +56,14 @@ class Order(Base):
     remarks: Mapped[str | None] = mapped_column(Text)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     hold_reason: Mapped[str | None] = mapped_column(Text)
+    # Set by the device that created the order (salesman app): unique, so a retried sync
+    # returns the same order instead of creating a duplicate.
+    client_order_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    created_offline: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    client_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    clarification_message: Mapped[str | None] = mapped_column(Text)
+    # Set when the order was included in a Tally export (exports are not repeated by accident).
+    tally_exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created_at_column()
@@ -63,6 +72,9 @@ class Order(Base):
     retailer: Mapped["Retailer"] = relationship()
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order")
     ai_extraction: Mapped["AiExtraction | None"] = relationship()
+    creator: Mapped["User"] = relationship(foreign_keys=[created_by])
+    approver: Mapped["User | None"] = relationship(foreign_keys=[approved_by])
+    events: Mapped[list["OrderEvent"]] = relationship(back_populates="order", order_by="OrderEvent.created_at")
 
 
 class OrderItem(Base):
@@ -130,3 +142,25 @@ class OrderCorrection(Base):
     created_at: Mapped[datetime] = created_at_column()
 
     order_item: Mapped[OrderItem] = relationship(back_populates="corrections")
+
+
+class OrderEvent(Base):
+    """Order history: who did what to an order, and when (received, confirmed, rejected,
+    clarification requested, corrected, exported...). Append-only."""
+
+    __tablename__ = "order_events"
+    __table_args__ = (
+        CheckConstraint(in_values("action", OrderEventAction), name="action_valid"),
+        Index("ix_order_events_order_id_created_at", "order_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("orders.id"))
+    action: Mapped[str] = mapped_column(String(30))
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))  # NULL: not recorded
+    message: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = created_at_column()
+
+    order: Mapped[Order] = relationship(back_populates="events")
+    actor: Mapped["User | None"] = relationship()

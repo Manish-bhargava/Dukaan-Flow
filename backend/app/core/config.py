@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"  # or an OpenAI-compatible endpoint
     OPENAI_TIMEOUT_SECONDS: float = 30.0
+    OPENAI_TRANSCRIBE_MODEL: str = "gpt-4o-mini-transcribe"  # voice notes -> text
 
     # Product images (Cloudinary). Only the backend uses these; the API secret never reaches
     # the browser. Without them, uploads return 503 and products show local placeholders.

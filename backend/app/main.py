@@ -5,12 +5,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import Settings, settings
 from app.exceptions.handlers import register_exception_handlers
+from app.middleware.errors import UnhandledErrorMiddleware
 from app.modules.auth.router import router as auth_router
+from app.modules.admin.router import router as admin_router
 from app.modules.ai_orders.router import router as ai_orders_router
 from app.modules.exports.router import router as exports_router
-from app.modules.orders.router import desk_router as order_desk_router
+from app.modules.order_desk.router import router as order_desk_router
 from app.modules.orders.router import router as orders_router
 from app.modules.products.router import router as products_router
+from app.modules.retailers.router import router as retailers_router
+from app.modules.salesman.router import router as salesman_router
 from app.utils.responses import success_response
 
 
@@ -28,13 +32,15 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
         logging.getLogger(name).setLevel(logging.INFO)
     app = FastAPI(title=app_settings.APP_NAME, debug=app_settings.DEBUG)
 
+    # Added first, so it runs inside CORS: unexpected errors still get CORS headers.
+    app.add_middleware(UnhandledErrorMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=app_settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["Content-Disposition"],  # CSV download file names
+        expose_headers=["Content-Disposition", "X-Exported-Count"],  # CSV file names, Tally export count
     )
 
     register_exception_handlers(app)
@@ -44,8 +50,11 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     api_router.add_api_route("/health", health_check, methods=["GET"], tags=["health"])
     api_router.include_router(auth_router)
     api_router.include_router(products_router)
+    api_router.include_router(retailers_router)
+    api_router.include_router(salesman_router)
     api_router.include_router(orders_router)
     api_router.include_router(order_desk_router)
+    api_router.include_router(admin_router)
     api_router.include_router(ai_orders_router)
     api_router.include_router(exports_router)
 

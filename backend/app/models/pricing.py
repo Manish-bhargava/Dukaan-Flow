@@ -15,7 +15,9 @@ if TYPE_CHECKING:
 
 
 class RetailerPrice(Base):
-    """A retailer's dealer price for a product, valid from effective_from until effective_to."""
+    """A dealer price for a product, valid from effective_from until effective_to.
+    retailer_id NULL is the product's default price, used for retailers without their own
+    price. Changes close the current row and add a new one, so rows are the price history."""
 
     __tablename__ = "retailer_prices"
     __table_args__ = (
@@ -28,7 +30,7 @@ class RetailerPrice(Base):
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()
-    retailer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("retailers.id"))
+    retailer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("retailers.id"))
     product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("products.id"))
     dealer_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     price_basis: Mapped[str] = mapped_column(String(20))
@@ -36,9 +38,10 @@ class RetailerPrice(Base):
     tax_inclusive: Mapped[bool] = mapped_column(Boolean)
     effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))  # NULL: seed/import
     created_at: Mapped[datetime] = created_at_column()
 
-    retailer: Mapped["Retailer"] = relationship(back_populates="prices")
+    retailer: Mapped["Retailer | None"] = relationship(back_populates="prices")
     product: Mapped["Product"] = relationship(back_populates="retailer_prices")
 
 

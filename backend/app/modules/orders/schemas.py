@@ -12,6 +12,12 @@ class OrderItemInput(BaseModel):
     quantity: Decimal = Quantity
     # Must be stated explicitly and match the product's order unit (e.g. "case").
     unit: str = Field(min_length=1, max_length=30)
+    # Offline orders: the dealer price the device showed. Never used for pricing; if it
+    # differs from the current price the order is held for Order Desk review.
+    expected_unit_price: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    # Offline orders: the product's active scheme ids the device showed. If the product's
+    # active schemes are different now, the order is held for review (never silently changed).
+    expected_scheme_ids: list[uuid.UUID] | None = None
 
 
 class CreateOrderInput(BaseModel):
@@ -19,13 +25,19 @@ class CreateOrderInput(BaseModel):
     retailer_id: uuid.UUID | None = None
     items: list[OrderItemInput] = Field(min_length=1)
     remarks: str | None = None
+    # Device-generated unique id (salesman app): sending the same order again returns the
+    # order already created instead of a duplicate.
+    client_order_id: str | None = Field(default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    created_offline: bool = False  # created on the device without internet, synced later
+    client_created_at: datetime | None = None  # when it was created on the device
 
 
 class CorrectOrderItemInput(BaseModel):
     new_product_id: uuid.UUID | None = None
     new_quantity: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=3)
     unit: str | None = Field(default=None, max_length=30)
-    reason: str | None = None
+    # Why the desk changed the retailer's/salesman's request (kept in the order history).
+    reason: str = Field(min_length=1, max_length=500)
     # Retailer wording to remember for the corrected product (retailer-specific alias).
     save_alias: str | None = Field(default=None, max_length=200)
 
@@ -34,9 +46,20 @@ class StatusReasonInput(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class RejectInput(BaseModel):
+    # Optional: the Order Desk rejects with one click; a default reason is stored and shown.
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class ApproveOrderInput(BaseModel):
     # Required only to release an order that exceeds the retailer's available credit.
     credit_override_reason: str | None = Field(default=None, max_length=500)
+    # Confirm at the order's own prices although a price/scheme changed since it was placed.
+    acknowledge_changes: bool = False
+
+
+class ClarificationInput(BaseModel):
+    message: str = Field(min_length=1, max_length=1000)
 
 
 # ---------------------------------------------------------------- responses
@@ -83,7 +106,10 @@ class QuoteLineOut(BaseModel):
 class QuoteOut(BaseModel):
     lines: list[QuoteLineOut]
     totals: OrderTotalsOut
-    can_order: bool
+    can_order: bool  # all lines in stock
+    available_credit: Decimal  # credit_limit - current_outstanding
+    within_credit: bool  # retailers cannot place the order when False
+    ordering_restricted_reason: str | None = None  # set: the Admin paused ordering for this shop
 
 
 class RetailerBriefOut(BaseModel):
@@ -135,6 +161,12 @@ class AiSourceOut(BaseModel):
     original_message: str
 
 
+class CreatorOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    role: str
+
+
 class OrderSummaryOut(BaseModel):
     id: uuid.UUID
     order_number: str
@@ -144,6 +176,8 @@ class OrderSummaryOut(BaseModel):
     item_count: int
     grand_total: Decimal
     created_at: datetime
+    created_offline: bool
+    client_order_id: str | None
 
 
 class OrderOut(OrderTotalsOut):
@@ -155,8 +189,15 @@ class OrderOut(OrderTotalsOut):
     remarks: str | None
     hold_reason: str | None
     rejection_reason: str | None
+    clarification_message: str | None
     created_at: datetime
     approved_at: datetime | None
+    approved_by: CreatorOut | None
+    tally_exported_at: datetime | None
+    created_by: CreatorOut  # who placed it (e.g. the salesman)
+    created_offline: bool
+    client_created_at: datetime | None
+    client_order_id: str | None
     ai: AiSourceOut | None
     items: list[OrderItemOut]
 

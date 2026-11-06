@@ -5,6 +5,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select
 
+from app.core.constants import OrderSource
 from app.exceptions.base import AppException
 from app.models import (
     CreditAccount,
@@ -33,6 +34,17 @@ def item(product_id, quantity, unit="case"):
 
 
 def place(tx, user_key, *items, retailer_id=None):
+    """An order that waits for the Order Desk (as AI-captured orders do), so the review,
+    correction and approval engine can be exercised. Same pricing/stock/credit path."""
+    actor = seed_user(tx, user_key)
+    retailer = orders.resolve_ordering_retailer(tx, actor, retailer_id)
+    order = orders.build_order(tx, actor, retailer, list(items), source=OrderSource.AI)
+    tx.commit()
+    return order
+
+
+def place_manual(tx, user_key, *items, retailer_id=None):
+    """A catalogue/salesman order: confirmed at placement unless it needs a credit hold."""
     return orders.create_order(
         tx, seed_user(tx, user_key), CreateOrderInput(retailer_id=retailer_id, items=list(items))
     )
@@ -60,9 +72,17 @@ def count(tx, model, *where):
 
 
 def test_retailer_creates_manual_order_with_backend_pricing(tx):
-    order = place(tx, "retailer_sharma", item(BS075, 10))
+    stock_before, outstanding_before = stock(tx, BS075), credit(tx, SHARMA).current_outstanding
+    order = place_manual(tx, "retailer_sharma", item(BS075, 10))
     [line] = order.items
+    # Every order waits for the Order Desk: nothing is deducted or debited yet.
     assert (order.source, order.status, order.retailer_id) == ("MANUAL", "PENDING", SHARMA)
+    assert order.approved_by is None and stock(tx, BS075) == stock_before
+    assert credit(tx, SHARMA).current_outstanding == outstanding_before
+    orders.approve_order(tx, seed_user(tx, "order_desk"), order.id)
+    assert order.approved_by == seed_id("user", "order_desk") and order.approved_at is not None
+    assert stock(tx, BS075) == stock_before - 11  # 10 paid + 1 free
+    assert credit(tx, SHARMA).current_outstanding == outstanding_before + order.grand_total
     assert order.created_by == seed_id("user", "retailer_sharma")
     assert (line.sku, line.paid_quantity, line.free_quantity) == ("SKU-BS-075", 10, 1)
     assert (line.unit_price, line.price_basis, line.gst_rate) == (Decimal("8.10"), "PIECE", Decimal("5"))
@@ -86,9 +106,10 @@ def test_order_keeps_price_snapshot_when_price_changes_later(tx):
     assert reloaded.grand_total == Decimal("8164.80")
 
 
-def test_order_over_available_credit_goes_on_credit_hold(tx):
-    # 8,164.80 + 11,617.69 = 19,782.49 > Sharma's available credit of 15,000
-    order = place(tx, "retailer_sharma", item(BS075, 10), item(DT1KG, 5))
+def test_salesman_order_over_available_credit_goes_on_credit_hold(tx):
+    # 8,164.80 + 11,617.69 = 19,782.49 > Sharma's available credit of 15,000. A retailer
+    # could not place this (see test_retailer_profile.py); their salesman can, for review.
+    order = place_manual(tx, "salesman_sunil", item(BS075, 10), item(DT1KG, 5), retailer_id=SHARMA)
     assert order.status == "CREDIT_HOLD"
     assert order.grand_total == Decimal("19782.49")
 
@@ -112,9 +133,10 @@ def test_retailer_cannot_order_for_another_retailer(tx):
 
 
 def test_salesman_orders_only_for_assigned_retailers(tx):
-    order = place(tx, "salesman_deepak", item(BS075, 1), retailer_id=PATEL)
-    assert order.source == "SALESMAN"
-    assert error_code(place, tx, "salesman_sunil", item(BS075, 1), retailer_id=PATEL) == "FORBIDDEN"
+    order = place_manual(tx, "salesman_deepak", item(BS075, 1), retailer_id=PATEL)
+    # Patel has no credit left, so the salesman's order cannot be auto-confirmed: credit hold.
+    assert (order.source, order.status) == ("SALESMAN", "CREDIT_HOLD")
+    assert error_code(place_manual, tx, "salesman_sunil", item(BS075, 1), retailer_id=PATEL) == "FORBIDDEN"
 
 
 @pytest.mark.parametrize("user_key", ["order_desk", "admin"])
@@ -127,7 +149,7 @@ def test_order_desk_and_admin_do_not_place_orders(tx, user_key):
 
 def correct(tx, user_key, order, **changes):
     return orders.correct_order_item(
-        tx, seed_user(tx, user_key), order.id, order.items[0].id, CorrectOrderItemInput(**changes)
+        tx, seed_user(tx, user_key), order.id, order.items[0].id, CorrectOrderItemInput(**{"reason": "Retailer phoned", **changes})
     )
 
 
@@ -218,7 +240,7 @@ def test_retailers_and_salesmen_cannot_approve(tx, user_key):
 
 
 def test_credit_hold_order_is_not_approved_without_override(tx):
-    order = place(tx, "retailer_sharma", item(BS075, 10), item(DT1KG, 5))
+    order = place_manual(tx, "salesman_sunil", item(BS075, 10), item(DT1KG, 5), retailer_id=SHARMA)
     assert error_code(approve, tx, order) == "CREDIT_LIMIT_EXCEEDED"
     tx.refresh(order)
     assert order.status == "CREDIT_HOLD"
@@ -227,7 +249,7 @@ def test_credit_hold_order_is_not_approved_without_override(tx):
 
 
 def test_order_desk_releases_credit_hold_with_recorded_reason(tx):
-    order = place(tx, "retailer_sharma", item(BS075, 10), item(DT1KG, 5))
+    order = place_manual(tx, "salesman_sunil", item(BS075, 10), item(DT1KG, 5), retailer_id=SHARMA)
     approve(tx, order, credit_override_reason="Owner approved; payment due Friday")
     assert order.status == "APPROVED"
     ledger = tx.scalar(select(CreditLedger).where(CreditLedger.order_id == order.id))
@@ -235,14 +257,23 @@ def test_order_desk_releases_credit_hold_with_recorded_reason(tx):
     assert credit(tx, SHARMA).current_outstanding == Decimal("35000.00") + Decimal("19782.49")
 
 
+def test_orders_under_review_hold_credit(tx):
+    first = place(tx, "retailer_sharma", item(DT1KG, 4))  # 9,581.60 of 15,000, held while under review
+    assert first.status == "PENDING"
+    # The same order again no longer fits: only 5,418.40 is left.
+    assert error_code(place, tx, "retailer_sharma", item(DT1KG, 4)) == "CREDIT_LIMIT_EXCEEDED"
+    # Rejecting the first releases its hold, so it fits again.
+    orders.reject_order(tx, seed_user(tx, "order_desk"), first.id, "Duplicate")
+    assert place(tx, "retailer_sharma", item(DT1KG, 4)).status == "PENDING"
+
+
 def test_credit_is_rechecked_at_approval_and_order_put_on_hold(tx):
-    first = place(tx, "retailer_sharma", item(DT1KG, 4))   # 9,581.60
-    second = place(tx, "retailer_sharma", item(DT1KG, 4))  # each fits the 15,000 alone
-    assert (first.status, second.status) == ("PENDING", "PENDING")
-    approve(tx, first)
-    assert error_code(approve, tx, second) == "CREDIT_LIMIT_EXCEEDED"
-    tx.refresh(second)
-    assert second.status == "CREDIT_HOLD"
+    order = place(tx, "retailer_sharma", item(DT1KG, 4))  # 9,581.60 fits the 15,000 when placed
+    credit(tx, SHARMA).current_outstanding += Decimal("10000")  # e.g. another debit before approval
+    tx.flush()
+    assert error_code(approve, tx, order) == "CREDIT_LIMIT_EXCEEDED"
+    tx.refresh(order)
+    assert order.status == "CREDIT_HOLD"
 
 
 def test_stock_is_rechecked_at_approval(tx):
@@ -305,10 +336,11 @@ def test_rejection_stores_reason_without_touching_stock_or_credit(tx):
     assert credit(tx, GUPTA).current_outstanding == outstanding_before
 
 
-def test_rejection_requires_reason_and_open_order(tx):
+def test_rejection_needs_an_open_order_and_defaults_its_reason(tx):
     desk = seed_user(tx, "order_desk")
+    blank = place(tx, "retailer_gupta", item(BS075, 1))
+    assert orders.reject_order(tx, desk, blank.id, "  ").rejection_reason == "Rejected by the order desk"
     order = place(tx, "retailer_gupta", item(BS075, 10))
-    assert error_code(orders.reject_order, tx, desk, order.id, "  ") == "VALIDATION_ERROR"
     approve(tx, order)
     assert error_code(orders.reject_order, tx, desk, order.id, "Too late") == "INVALID_ORDER_STATUS"
 

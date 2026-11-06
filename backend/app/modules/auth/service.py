@@ -9,6 +9,7 @@ Logs never contain the OTP, the API key or the JWT.
 """
 
 import logging
+from datetime import UTC, datetime
 
 import anyio
 from sqlalchemy.orm import Session
@@ -46,6 +47,12 @@ def _delivery_failed() -> AppException:
     return AppException(
         "We could not send the OTP. Please try again later.", ErrorCode.OTP_DELIVERY_FAILED, 503
     )
+
+
+def _record_login(db: Session, user: User) -> None:
+    """users.last_login_at, for the Admin's user activity view."""
+    user.last_login_at = datetime.now(UTC)
+    db.commit()
 
 
 def issue_token(user: User) -> TokenOut:
@@ -144,6 +151,7 @@ def verify_otp(db: Session, store: AuthStore, phone: str, otp: str) -> TokenOut:
     if not user.is_active:
         raise _account_disabled()
     logger.info("OTP login successful for user %s", user.id)
+    _record_login(db, user)
     return issue_token(user)
 
 
@@ -164,4 +172,5 @@ def login_with_password(db: Session, store: AuthStore, phone: str, password: str
         raise _account_disabled()
 
     store.clear_login_attempts(phone)
+    _record_login(db, user)
     return issue_token(user)

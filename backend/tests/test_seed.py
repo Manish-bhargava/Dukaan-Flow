@@ -18,8 +18,9 @@ EXPECTED_TOTALS = {
     "users": 6,
     "retailers": 5,
     "categories": 4,
+    "brands": 4,
     "products": 10,
-    "retailer_prices": 51,
+    "retailer_prices": 61,  # incl. one default price per product
     "schemes": 3,
     "inventory": 10,
     "stock_movements": 9,
@@ -140,7 +141,7 @@ def test_demo_activity_covers_every_status_and_keeps_books_balanced(tx):
         "DF-DEMO-0004": "REJECTED",
     }
     assert {o.source for o in tx.scalars(select(Order))} == {"MANUAL", "AI", "SALESMAN"}
-    assert sorted(e.extraction_status for e in tx.scalars(select(AiExtraction))) == ["CONFIRMED", "PENDING"]
+    assert sorted(e.extraction_status for e in tx.scalars(select(AiExtraction))) == ["CONFIRMED", "CONFIRMED", "PENDING"]
     assert tx.scalar(select(func.count()).select_from(OrderCorrection)) == 1
     assert_books_balance(tx)
 

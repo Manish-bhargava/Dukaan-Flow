@@ -8,6 +8,8 @@ from app.core.dependencies import CurrentUser, DbSession
 from app.modules.orders import controller
 from app.modules.orders.schemas import (
     ApproveOrderInput,
+    RejectInput,
+    ClarificationInput,
     CorrectOrderItemInput,
     CreateOrderInput,
     OrderOut,
@@ -19,7 +21,6 @@ from app.schemas.common import ApiResponse
 
 # Role and retailer-access checks are enforced in the orders service for every action.
 router = APIRouter(prefix="/orders", tags=["orders"])
-desk_router = APIRouter(prefix="/order-desk", tags=["order desk"])
 
 
 @router.post("/quote", response_model=ApiResponse[QuoteOut])
@@ -42,8 +43,10 @@ def list_orders(
     search: Annotated[str | None, Query(max_length=100)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    created_by_me: bool = False,
+    retailer_id: uuid.UUID | None = None,
 ):
-    return controller.list_orders(db, user, status or [], source, search, page, limit)
+    return controller.list_orders(db, user, status or [], source, search, page, limit, created_by_me, retailer_id)
 
 
 @router.get("/{order_id}", response_model=ApiResponse[OrderOut])
@@ -66,12 +69,12 @@ def approve(order_id: uuid.UUID, data: ApproveOrderInput, db: DbSession, user: C
     return controller.approve(db, user, order_id, data)
 
 
+@router.post("/{order_id}/clarification", response_model=ApiResponse[OrderOut])
+def request_clarification(order_id: uuid.UUID, data: ClarificationInput, db: DbSession, user: CurrentUser):
+    """Order Desk asks about an unclear order; it waits in CLARIFICATION_REQUIRED, unchanged."""
+    return controller.request_clarification(db, user, order_id, data)
+
+
 @router.post("/{order_id}/reject", response_model=ApiResponse[OrderOut])
-def reject(order_id: uuid.UUID, data: StatusReasonInput, db: DbSession, user: CurrentUser):
+def reject(order_id: uuid.UUID, db: DbSession, user: CurrentUser, data: RejectInput | None = None):
     return controller.reject(db, user, order_id, data)
-
-
-@desk_router.get("/summary", response_model=ApiResponse[dict[str, int]])
-def summary(db: DbSession, user: CurrentUser):
-    """Order counts per status (ORDER_DESK / ADMIN)."""
-    return controller.summary(db, user)

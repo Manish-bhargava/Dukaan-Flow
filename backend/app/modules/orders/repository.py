@@ -14,6 +14,11 @@ def get_order(db: Session, order_id: uuid.UUID, lock: bool = False) -> Order | N
     return db.scalar(statement)
 
 
+def get_order_by_client_id(db: Session, client_order_id: str) -> Order | None:
+    statement = select(Order).where(Order.client_order_id == client_order_id).options(selectinload(Order.items))
+    return db.scalar(statement)
+
+
 def list_orders(
     db: Session, retailer_ids: list[uuid.UUID] | None, status: str | None = None
 ) -> list[Order]:
@@ -38,8 +43,14 @@ def search_orders(
     search: str | None,
     offset: int,
     limit: int,
+    created_by: uuid.UUID | None = None,
+    retailer_id: uuid.UUID | None = None,
 ) -> tuple[list[Order], int]:
     statement = select(Order).join(Order.retailer)
+    if created_by is not None:
+        statement = statement.where(Order.created_by == created_by)
+    if retailer_id is not None:
+        statement = statement.where(Order.retailer_id == retailer_id)
     if retailer_ids is not None:
         statement = statement.where(Order.retailer_id.in_(retailer_ids))
     if statuses:

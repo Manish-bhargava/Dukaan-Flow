@@ -27,6 +27,10 @@ class ErrorCode:
     CREDIT_LIMIT_EXCEEDED = "CREDIT_LIMIT_EXCEEDED"
     INVALID_ORDER_STATUS = "INVALID_ORDER_STATUS"
     INVALID_EXTRACTION_STATUS = "INVALID_EXTRACTION_STATUS"
+    ORDER_DATA_CHANGED = "ORDER_DATA_CHANGED"
+    NOTHING_TO_EXPORT = "NOTHING_TO_EXPORT"
+    ORDERING_RESTRICTED = "ORDERING_RESTRICTED"
+    CONFLICT = "CONFLICT"
     AI_NOT_CONFIGURED = "AI_NOT_CONFIGURED"
     AI_SERVICE_UNAVAILABLE = "AI_SERVICE_UNAVAILABLE"
     IMAGE_STORAGE_NOT_CONFIGURED = "IMAGE_STORAGE_NOT_CONFIGURED"
@@ -62,6 +66,12 @@ class ExtractionStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class AiInputType(StrEnum):
+    TEXT = "TEXT"
+    IMAGE = "IMAGE"  # photo of a handwritten / printed order list
+    VOICE = "VOICE"  # voice note, transcribed before extraction
+
+
 class OrderSource(StrEnum):
     MANUAL = "MANUAL"
     AI = "AI"
@@ -71,9 +81,28 @@ class OrderSource(StrEnum):
 class OrderStatus(StrEnum):
     PENDING = "PENDING"
     CREDIT_HOLD = "CREDIT_HOLD"
-    ON_HOLD = "ON_HOLD"  # put on hold by the Order Desk (hold_reason)
+    ON_HOLD = "ON_HOLD"  # needs review: offline order whose data changed, or held by the desk (hold_reason)
+    CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"  # desk asked the retailer/salesman (clarification_message)
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+
+
+class OrderEventAction(StrEnum):
+    """Order history (order_events), one row per important action."""
+
+    RECEIVED = "RECEIVED"
+    CONFIRMED = "CONFIRMED"
+    CREDIT_HOLD = "CREDIT_HOLD"
+    PUT_ON_HOLD = "PUT_ON_HOLD"
+    CLARIFICATION_REQUESTED = "CLARIFICATION_REQUESTED"
+    CORRECTED = "CORRECTED"
+    REJECTED = "REJECTED"
+    EXPORTED = "EXPORTED"
+
+
+class VisitOutcome(StrEnum):
+    ORDER_PLACED = "ORDER_PLACED"
+    NO_ORDER = "NO_ORDER"
 
 
 class StockMovementType(StrEnum):
@@ -92,7 +121,11 @@ class CreditTransactionType(StrEnum):
 ORDER_DESK_ROLES = (UserRole.ORDER_DESK, UserRole.ADMIN)
 
 # Orders can only be corrected, approved or rejected while in one of these statuses.
-OPEN_ORDER_STATUSES = (OrderStatus.PENDING, OrderStatus.CREDIT_HOLD, OrderStatus.ON_HOLD)
+OPEN_ORDER_STATUSES = (
+    OrderStatus.PENDING, OrderStatus.CREDIT_HOLD, OrderStatus.ON_HOLD, OrderStatus.CLARIFICATION_REQUIRED,
+)
+# Open orders that hold the retailer's credit while they wait (CREDIT_HOLD is already above it).
+CREDIT_RESERVING_STATUSES = (OrderStatus.PENDING, OrderStatus.ON_HOLD, OrderStatus.CLARIFICATION_REQUIRED)
 
 # Login methods by role: retailers use phone + OTP only; internal users use phone + password only.
 OTP_LOGIN_ROLES = (UserRole.RETAILER,)

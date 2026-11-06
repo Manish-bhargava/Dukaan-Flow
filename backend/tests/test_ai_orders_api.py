@@ -2,15 +2,16 @@
 clarification of ambiguous lines, draft -> order confirmation and alias learning."""
 
 import json
+import uuid
 from decimal import Decimal
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.core.config import settings
 from app.core.security import create_access_token
-from app.models import Order, RetailerAlias
+from app.models import CreditAccount, Order, RetailerAlias
 from app.modules.ai_orders import llm
 from seed.run_seed import seed_id
 from tests.conftest import seed_user
@@ -36,17 +37,37 @@ class FakeOpenAI:
 
     def __init__(self):
         self.lines: list[dict] = []
+        self.matches: list[dict] = []  # answers to the candidate comparison (close calls)
+        self.read_text = ""  # what the model "reads" from a photo
+        self.transcript = ""  # what a voice note "says"
         self.status = 200
         self.requests: list[dict] = []
 
+    @property
+    def extraction_requests(self) -> list[dict]:
+        return [r for r in self.requests if r.get("response_format", {}).get("json_schema", {}).get("name") == "order_lines"]
+
+    @property
+    def comparison_requests(self) -> list[dict]:
+        return [r for r in self.requests if r.get("response_format", {}).get("json_schema", {}).get("name") == "product_matches"]
+
     def handler(self, request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "https://api.openai.com/v1/chat/completions"
         assert request.headers["authorization"] == "Bearer test-openai-key"
-        body = json.loads(request.content)
-        self.requests.append(body)
         if self.status != 200:
             return httpx.Response(self.status, json={"error": {"type": "server_error"}})
-        content = json.dumps({"lines": self.lines})
+        if str(request.url) == "https://api.openai.com/v1/audio/transcriptions":
+            self.requests.append({"transcription": True, "size": len(request.content)})
+            return httpx.Response(200, json={"text": self.transcript})
+        assert str(request.url) == "https://api.openai.com/v1/chat/completions"
+        body = json.loads(request.content)
+        self.requests.append(body)
+        if body["response_format"]["json_schema"]["name"] == "product_matches":
+            content = json.dumps({"matches": self.matches})
+        else:
+            output = {"lines": self.lines}
+            if "read_text" in body["response_format"]["json_schema"]["schema"]["properties"]:
+                output["read_text"] = self.read_text
+            content = json.dumps(output)
         return httpx.Response(200, json={"model": "gpt-test", "choices": [{"message": {"content": content}}]})
 
 
@@ -95,7 +116,7 @@ def test_hinglish_sample_message_becomes_a_reviewable_draft(as_user, openai, tx)
 def test_prompt_contains_message_and_retailers_catalogue_but_no_prices(as_user, openai):
     openai.lines = SAMPLE_OUTPUT
     extract(as_user, SAMPLE)
-    [request] = openai.requests
+    [request] = openai.extraction_requests
     assert request["temperature"] == 0
     assert request["response_format"]["json_schema"]["strict"] is True
     prompt = request["messages"][1]["content"]
@@ -241,3 +262,83 @@ def test_reviewed_draft_is_placed_as_ai_order_and_learns_corrections(as_user, op
     # ...but only for Sharma: Gupta's draft is not affected by Sharma's alias.
     [gupta_item] = extract(as_user, "3 peti biscuit chhota", key="retailer_gupta")["items"]
     assert gupta_item["product"]["sku"] == "SKU-BS-075"
+
+
+# ---------------------------------------------------------------- photo and voice input
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+
+
+def upload(as_user, kind, content, content_type, key="retailer_sharma"):
+    return as_user(key, "POST", "/ai-orders/extract-media", data={"kind": kind},
+                   files={"file": (f"order.{content_type.split('/')[1]}", content, content_type)})
+
+
+def test_photo_of_order_list_becomes_a_draft(as_user, openai):
+    openai.lines = SAMPLE_OUTPUT[:1]
+    openai.read_text = "Biscuit chhota - 5 peti"
+    response = upload(as_user, "image", PNG, "image/png")
+    assert response.status_code == 200, response.json()
+    draft = response.json()["data"]
+    assert draft["input_type"] == "IMAGE" and draft["original_message"] == "Biscuit chhota - 5 peti"
+    [request] = openai.extraction_requests
+    image_part = request["messages"][1]["content"][1]
+    assert image_part["type"] == "image_url" and image_part["image_url"]["url"].startswith("data:image/png;base64,")
+    assert draft["items"][0]["product"]["sku"] == "SKU-BS-075"
+
+
+def test_voice_note_is_transcribed_then_read(as_user, openai):
+    openai.transcript = "bhaiya 2 peti washing powder 1 kilo bhej do"
+    openai.lines = [SAMPLE_OUTPUT[1]]
+    response = upload(as_user, "voice", b"webm-audio" * 20, "audio/webm")
+    assert response.status_code == 200, response.json()
+    draft = response.json()["data"]
+    assert draft["input_type"] == "VOICE" and draft["original_message"] == openai.transcript
+    assert openai.requests[0] == {"transcription": True, "size": openai.requests[0]["size"]}
+    assert draft["items"][0]["product"]["sku"] == "SKU-DT-1KG"
+
+
+@pytest.mark.parametrize("kind,content_type", [("image", "application/pdf"), ("voice", "image/png")])
+def test_media_type_is_checked(as_user, openai, kind, content_type):
+    assert upload(as_user, kind, b"x" * 10, content_type).status_code == 422
+    assert openai.requests == []
+
+
+def test_order_desk_cannot_capture_media(as_user, openai):
+    assert upload(as_user, "image", PNG, "image/png", key="order_desk").status_code == 403
+
+
+# ---------------------------------------------------------------- learning loop
+
+
+def test_ai_lines_link_to_order_lines_and_desk_corrections_teach_the_retailers_words(as_user, openai, tx):
+    from app.models import AiExtractionItem
+
+    tx.execute(update(CreditAccount).values(credit_limit=Decimal("10000000")))
+    tx.commit()
+    openai.lines = [line("3 peti chhota wala biscuit", "glucose biscuit", 3, "case", ["SKU-BS-150"], 0.9)]
+    draft = extract(as_user, "3 peti chhota wala biscuit")
+    item = draft["items"][0]
+    assert item["product"]["sku"] == "SKU-BS-150" and item["evidence"]
+    order = as_user("retailer_sharma", "POST", f"/ai-orders/{draft['extraction_id']}/confirm", json={"items": [
+        {"extraction_item_id": item["id"], "product_id": str(BS150), "quantity": 3, "unit": "case"}]}).json()["data"]
+    ai_line = tx.get(AiExtractionItem, uuid.UUID(item["id"]))
+    tx.refresh(ai_line)
+    assert str(ai_line.order_item_id) == order["items"][0]["id"]
+
+    # The order desk sees the AI interpretation, and corrects 150 g -> 75 g.
+    review = as_user("order_desk", "GET", f"/order-desk/orders/{order['id']}").json()["data"]
+    [ai] = review["ai_lines"]
+    assert ai["product"]["sku"] == "SKU-BS-150" and ai["evidence"] and ai["original_text"] == "3 peti chhota wala biscuit"
+    as_user("order_desk", "PATCH", f"/orders/{order['id']}/items/{order['items'][0]['id']}",
+            json={"new_product_id": str(BS075), "reason": "Retailer means the 75g pack"})
+    saved = tx.scalar(select(RetailerAlias).where(RetailerAlias.retailer_id == seed_id("retailer", "sharma"),
+                                                  RetailerAlias.normalized_alias == "chhota wala biscuit"))
+    assert saved is not None and saved.product_id == BS075
+
+    # Next time the same words go straight to the corrected product, with the evidence.
+    openai.lines = [line("4 peti chhota wala biscuit", "glucose biscuit", 4, "case", ["SKU-BS-150"], 0.9)]
+    [again] = extract(as_user, "4 peti chhota wala biscuit")["items"]
+    assert again["product"]["sku"] == "SKU-BS-075" and again["requires_clarification"] is False
+    assert any("order desk corrected" in e for e in again["evidence"])

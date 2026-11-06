@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import Engine, delete, select, text, update
 from sqlalchemy.orm import Session
 
+from app.core.constants import OrderSource
 from app.exceptions.base import AppException
 from app.models import (
     CreditAccount,
@@ -21,18 +22,21 @@ from app.models import (
     Inventory,
     Order,
     OrderCorrection,
+    OrderEvent,
     OrderItem,
     StockMovement,
     User,
 )
 from app.modules.orders import service as orders
-from app.modules.orders.schemas import CorrectOrderItemInput, CreateOrderInput, OrderItemInput
+from app.modules.orders.schemas import CorrectOrderItemInput, OrderItemInput
 from seed.run_seed import seed_id
 from tests.test_seed import assert_books_balance
 
 BS075, DB150, DT1KG, DW500 = (seed_id("product", s) for s in ("SKU-BS-075", "SKU-DB-150", "SKU-DT-1KG", "SKU-DW-500"))
 SHARMA, GUPTA, JAIN = (seed_id("retailer", k) for k in ("sharma", "gupta", "jain"))
-ORDERING_USER = {SHARMA: "retailer_sharma", GUPTA: "retailer_gupta", JAIN: "salesman_sunil"}
+# Orders are placed by the retailers' salesman as AI-captured orders, so they wait for the
+# Order Desk (catalogue orders are confirmed at placement and never reach these races).
+ORDERING_USER = {SHARMA: "salesman_sunil", GUPTA: "salesman_sunil", JAIN: "salesman_sunil"}
 
 
 class World:
@@ -44,10 +48,13 @@ class World:
         """Create and commit an order; lines are (product_id, cases)."""
         with Session(self.engine) as s:
             user = s.get(User, seed_id("user", ORDERING_USER[retailer_id]))
-            order = orders.create_order(s, user, CreateOrderInput(
-                retailer_id=retailer_id,
-                items=[OrderItemInput(product_id=p, quantity=Decimal(q), unit="case") for p, q in lines],
-            ))
+            retailer = orders.resolve_ordering_retailer(s, user, retailer_id)
+            order = orders.build_order(
+                s, user, retailer,
+                [OrderItemInput(product_id=p, quantity=Decimal(q), unit="case") for p, q in lines],
+                source=OrderSource.AI,
+            )
+            s.commit()
             self.order_ids.append(order.id)
             return order.id
 
@@ -82,6 +89,7 @@ def world(test_engine, seed_runs):
         s.execute(delete(OrderCorrection).where(OrderCorrection.order_item_id.in_(item_ids)))
         s.execute(delete(StockMovement).where(StockMovement.order_id.in_(ids)))
         s.execute(delete(CreditLedger).where(CreditLedger.order_id.in_(ids)))
+        s.execute(delete(OrderEvent).where(OrderEvent.order_id.in_(ids)))
         s.execute(delete(OrderItem).where(OrderItem.order_id.in_(ids)))
         s.execute(delete(Order).where(Order.id.in_(ids)))
         for product_id, stock in stock_before.items():
@@ -201,7 +209,7 @@ def test_correction_and_approval_race_stays_consistent(world):
     def correct(s: Session):
         order = s.get(Order, order_id)
         orders.correct_order_item(s, s.get(User, seed_id("user", "order_desk")), order_id,
-                                  order.items[0].id, CorrectOrderItemInput(new_quantity=Decimal(20)))
+                                  order.items[0].id, CorrectOrderItemInput(new_quantity=Decimal(20), reason="Race test"))
 
     results = race(world.engine, approve(order_id), correct)
 

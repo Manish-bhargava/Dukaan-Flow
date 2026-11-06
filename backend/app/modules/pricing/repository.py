@@ -14,16 +14,17 @@ def get_effective_prices(
     at: datetime,
     product_ids: Iterable[uuid.UUID] | None = None,
 ) -> dict[uuid.UUID, RetailerPrice]:
-    """The retailer's price per product effective at `at` (latest effective_from wins)."""
+    """The retailer's price per product effective at `at`: the retailer's own price, else the
+    product's default price (retailer_id NULL); latest effective_from wins."""
     statement = (
         select(RetailerPrice)
         .where(
-            RetailerPrice.retailer_id == retailer_id,
+            or_(RetailerPrice.retailer_id == retailer_id, RetailerPrice.retailer_id.is_(None)),
             RetailerPrice.effective_from <= at,
             or_(RetailerPrice.effective_to.is_(None), RetailerPrice.effective_to > at),
         )
         .distinct(RetailerPrice.product_id)
-        .order_by(RetailerPrice.product_id, RetailerPrice.effective_from.desc())
+        .order_by(RetailerPrice.product_id, RetailerPrice.retailer_id.is_(None), RetailerPrice.effective_from.desc())
     )
     if product_ids is not None:
         statement = statement.where(RetailerPrice.product_id.in_(list(product_ids)))

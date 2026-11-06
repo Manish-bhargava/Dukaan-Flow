@@ -118,7 +118,7 @@ def demo(tx, tx_client):
 def test_seed_summary_counts_demo_activity(demo):
     data = demo.get("/api/v1/dev/seed-summary").json()["data"]
     assert data["orders_by_status"] == {"APPROVED": 1, "PENDING": 1, "CREDIT_HOLD": 1, "REJECTED": 1}
-    assert (data["order_corrections"], data["ai_extractions"], data["ai_extraction_items"]) == (1, 2, 5)
+    assert (data["order_corrections"], data["ai_extractions"], data["ai_extraction_items"]) == (1, 3, 6)
 
 
 def test_users_endpoint_lists_all_roles(demo):
@@ -155,8 +155,10 @@ def test_unknown_order_returns_404(demo):
 
 
 def test_ai_extractions_show_confirmation_and_clarification(demo):
-    extractions = {e["extraction_status"]: e for e in demo.get("/api/v1/dev/ai-extractions").json()["data"]}
-    assert extractions["CONFIRMED"]["order_number"] == "DF-DEMO-0002"
+    all_extractions = demo.get("/api/v1/dev/ai-extractions").json()["data"]
+    confirmed = sorted(e["order_number"] for e in all_extractions if e["extraction_status"] == "CONFIRMED")
+    assert confirmed == ["DF-DEMO-0002", "DF-DEMO-0004"]  # Sharma's order; Jain's (salesman, later rejected)
+    extractions = {e["extraction_status"]: e for e in all_extractions}
     assert extractions["PENDING"]["order_number"] is None
     assert any(i["unit"] is None and i["requires_clarification"] for i in extractions["PENDING"]["items"])
 

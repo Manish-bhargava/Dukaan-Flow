@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 from app.core.security import create_access_token
 from app.models import CreditAccount, Inventory, RetailerPrice, Scheme
 from seed.run_seed import seed_id
-from tests.conftest import seed_user
+from tests.conftest import place_open_order, seed_user
 
 BS075, DT1KG, TE250 = (seed_id("product", s) for s in ("SKU-BS-075", "SKU-DT-1KG", "SKU-TE-250"))
 SHARMA = seed_id("retailer", "sharma")
@@ -32,6 +32,12 @@ def cart(*lines, **extra):
 def ok(response, status=200):
     assert response.status_code == status, response.json()
     return response.json()["data"]
+
+
+def accepted(as_user, user_key, body):
+    """Place an order as `user_key`, then the Order Desk accepts it (every order is reviewed)."""
+    placed = ok(as_user(user_key, "POST", "/orders", json=body), 201)
+    return ok(as_user("order_desk", "POST", f"/orders/{placed['id']}/approve", json={}))
 
 
 def err(response):
@@ -97,6 +103,7 @@ def test_frontend_prices_and_totals_are_ignored(as_user):
 
 def test_place_order_stores_price_scheme_and_gst_snapshots(as_user, tx):
     order = ok(as_user("retailer_sharma", "POST", "/orders", json=cart((BS075, 10), remarks="Morning")), 201)
+    # Catalogue orders wait for the Order Desk like every other order.
     assert order["status"] == "PENDING" and order["source"] == "MANUAL" and order["remarks"] == "Morning"
     [item] = order["items"]
     assert (item["sku"], Decimal(item["paid_quantity"]), Decimal(item["free_quantity"])) == ("SKU-BS-075", 10, 1)
@@ -113,9 +120,10 @@ def test_place_order_stores_price_scheme_and_gst_snapshots(as_user, tx):
     assert Decimal(line["unit_price"]) == Decimal("16.20") and line["scheme"] is None
 
 
-def test_order_over_available_credit_goes_to_credit_hold(as_user):
-    order = ok(as_user("retailer_sharma", "POST", "/orders", json=cart((BS075, 25))), 201)  # 20,412 > 15,000
-    assert order["status"] == "CREDIT_HOLD"
+def test_retailer_order_over_available_credit_is_refused(as_user):
+    response = as_user("retailer_sharma", "POST", "/orders", json=cart((BS075, 25)))  # 20,412 > 15,000
+    assert err(response) == (409, "CREDIT_LIMIT_EXCEEDED")
+    assert response.json()["details"] == {"grand_total": "20412.00", "available_credit": "15000.00"}
 
 
 def test_out_of_stock_order_is_refused(as_user):
@@ -167,7 +175,7 @@ def test_retailer_cannot_use_order_desk_actions(as_user, method, path, body):
     order = ok(as_user("retailer_sharma", "POST", "/orders", json=cart((BS075, 1))), 201)
     assert err(as_user("retailer_sharma", method, f"/orders/{order['id']}{path}", json=body)) == (403, "FORBIDDEN")
     item_id = order["items"][0]["id"]
-    response = as_user("retailer_sharma", "PATCH", f"/orders/{order['id']}/items/{item_id}", json={"new_quantity": 3})
+    response = as_user("retailer_sharma", "PATCH", f"/orders/{order['id']}/items/{item_id}", json={"new_quantity": 3, "reason": "x"})
     assert err(response) == (403, "FORBIDDEN")
 
 
@@ -186,9 +194,11 @@ def test_endpoints_require_login(tx_client):
 
 def test_order_desk_review_correct_hold_confirm_and_export(as_user, tx):
     tx.execute(update(CreditAccount).where(CreditAccount.retailer_id == SHARMA).values(credit_limit=Decimal("100000")))
-    placed = ok(as_user("retailer_sharma", "POST", "/orders", json=cart((BS075, 10), (DT1KG, 4))), 201)
+    tx.commit()
+    open_order = place_open_order(tx, "retailer_sharma", (BS075, 10), (DT1KG, 4))  # e.g. AI-captured
+    order_id = str(open_order.id)
+    placed = ok(as_user("retailer_sharma", "GET", f"/orders/{order_id}"))
     assert placed["status"] == "PENDING"
-    order_id = placed["id"]
 
     # Incoming queue: filter by status and search by shop name / order number.
     queue = ok(as_user("order_desk", "GET", "/orders", params={"status": ["PENDING", "CREDIT_HOLD", "ON_HOLD"],
@@ -197,7 +207,7 @@ def test_order_desk_review_correct_hold_confirm_and_export(as_user, tx):
     found = ok(as_user("order_desk", "GET", "/orders", params={"search": placed["order_number"]}))
     assert [o["id"] for o in found["items"]] == [order_id]
     counts = ok(as_user("order_desk", "GET", "/order-desk/summary"))
-    assert counts["PENDING"] >= 1 and set(counts) == {"PENDING", "CREDIT_HOLD", "ON_HOLD", "APPROVED", "REJECTED"}
+    assert counts["PENDING"] >= 1 and set(counts) == {"PENDING", "CREDIT_HOLD", "ON_HOLD", "CLARIFICATION_REQUIRED", "APPROVED", "REJECTED"}
 
     # Detail shows retailer info and line snapshots.
     detail = ok(as_user("order_desk", "GET", f"/orders/{order_id}"))
@@ -217,7 +227,7 @@ def test_order_desk_review_correct_hold_confirm_and_export(as_user, tx):
     held = ok(as_user("order_desk", "POST", f"/orders/{order_id}/hold", json={"reason": "Confirm delivery date"}))
     assert (held["status"], held["hold_reason"]) == ("ON_HOLD", "Confirm delivery date")
     biscuit = next(i for i in held["items"] if i["sku"] == "SKU-BS-075")
-    held = ok(as_user("order_desk", "PATCH", f"/orders/{order_id}/items/{biscuit['id']}", json={"new_quantity": 11}))
+    held = ok(as_user("order_desk", "PATCH", f"/orders/{order_id}/items/{biscuit['id']}", json={"new_quantity": 11, "reason": "Retailer phoned"}))
     assert held["status"] == "ON_HOLD"
 
     # Confirm: stock (paid + free) is deducted.
@@ -257,8 +267,22 @@ def test_export_date_filter(as_user):
     assert future.content.decode("utf-8-sig").strip().count("\n") == 0  # header only
 
 
-def test_rejecting_requires_reason_and_rejected_order_cannot_be_confirmed(as_user):
-    order = ok(as_user("retailer_sharma", "POST", "/orders", json=cart((BS075, 1))), 201)
-    assert as_user("order_desk", "POST", f"/orders/{order['id']}/reject", json={"reason": " "}).status_code == 422
-    ok(as_user("order_desk", "POST", f"/orders/{order['id']}/reject", json={"reason": "Duplicate"}))
+def test_one_click_reject_and_rejected_order_cannot_be_confirmed(as_user, tx):
+    order = {"id": str(place_open_order(tx, "retailer_sharma", (BS075, 1)).id)}
+    # One click: no body needed; a default reason is stored and shown to the retailer.
+    rejected = ok(as_user("order_desk", "POST", f"/orders/{order['id']}/reject"))
+    assert (rejected["status"], rejected["rejection_reason"]) == ("REJECTED", "Rejected by the order desk")
     assert err(as_user("order_desk", "POST", f"/orders/{order['id']}/approve", json={})) == (409, "INVALID_ORDER_STATUS")
+
+
+def test_desk_queue_has_catalogue_salesman_and_ai_orders(as_user, tx):
+    manual = ok(as_user("retailer_sharma", "POST", "/orders", json=cart((BS075, 1))), 201)
+    salesman = ok(as_user("salesman_sunil", "POST", "/orders", json=cart((BS075, 1), retailer_id=str(SHARMA))), 201)
+    ai = place_open_order(tx, "retailer_sharma", (BS075, 2))
+    queue = ok(as_user("order_desk", "GET", "/orders",
+                       params={"status": ["PENDING", "CREDIT_HOLD", "ON_HOLD"], "limit": 100}))["items"]
+    ids = {o["id"] for o in queue}
+    assert {str(ai.id), manual["id"], salesman["id"]} <= ids
+    # The desk can reject a catalogue order: nothing was deducted, the credit hold is released.
+    rejected = ok(as_user("order_desk", "POST", f"/orders/{manual['id']}/reject", json={"reason": "Out of route"}))
+    assert rejected["status"] == "REJECTED" and rejected["rejection_reason"] == "Out of route"

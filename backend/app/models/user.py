@@ -30,6 +30,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(30), index=True)
     retailer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("retailers.id"), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
 

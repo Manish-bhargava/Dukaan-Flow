@@ -18,7 +18,8 @@ EXPECTED_TABLES = {
     "users", "otp_verifications", "retailers", "categories", "products", "retailer_prices",
     "schemes", "retailer_aliases", "ai_extractions", "ai_extraction_items", "orders",
     "order_items", "order_corrections", "inventory", "stock_movements", "credit_accounts",
-    "credit_ledger",
+    "credit_ledger", "shop_visits", "order_events", "brands", "audit_logs", "app_settings",
+    "salesman_sync_status",
 }
 
 

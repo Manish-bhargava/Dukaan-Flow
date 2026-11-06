@@ -5,18 +5,17 @@ retailer (or their assigned salesman) has reviewed, and the order then goes thro
 normal Order Desk workflow (review, correction, approval or rejection).
 """
 
+import base64
 import uuid
-from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.core.constants import ErrorCode, ExtractionStatus, OrderSource
+from app.core.constants import AiInputType, ErrorCode, ExtractionStatus, OrderSource
 from app.core.permissions import ensure_can_access_retailer
 from app.exceptions.base import AppException
 from app.models import AiExtraction, AiExtractionItem, Order, User
-from app.modules.ai_orders import llm, matcher, repository
+from app.modules.ai_orders import graph, llm, matcher, repository
 from app.modules.ai_orders.schemas import ConfirmExtractionInput, ExtractOrderInput, RecordExtractionInput
-from app.modules.pricing import repository as pricing_repository
 from app.modules.orders import service as orders_service
 from app.modules.orders.schemas import OrderItemInput
 
@@ -31,13 +30,15 @@ def record_extraction(db: Session, actor: User, data: RecordExtractionInput) -> 
             retailer_id=retailer.id,
             user_id=actor.id,
             original_message=data.original_message,
+            input_type=data.input_type,
             extraction_status=ExtractionStatus.PENDING,
             model_name=data.model_name,
             raw_response=data.raw_response,
         )
-        for item in data.items:
+        for line_no, item in enumerate(data.items, start=1):
             unclear = item.quantity is None or item.unit is None or item.matched_product_id is None
             extraction.items.append(AiExtractionItem(
+                line_no=line_no,
                 original_text=item.original_text,
                 extracted_name=item.extracted_name,
                 quantity=item.quantity,
@@ -45,6 +46,8 @@ def record_extraction(db: Session, actor: User, data: RecordExtractionInput) -> 
                 matched_product_id=item.matched_product_id,
                 confidence=item.confidence,
                 alternatives=item.alternatives,
+                evidence=item.evidence,
+                clarification_reason=item.clarification_reason,
                 requires_clarification=item.requires_clarification or unclear,
             ))
         db.add(extraction)
@@ -56,39 +59,48 @@ def record_extraction(db: Session, actor: User, data: RecordExtractionInput) -> 
 
 
 def extract_order(db: Session, actor: User, data: ExtractOrderInput) -> AiExtraction:
-    """Message -> LLM extraction -> backend SKU matching -> stored draft (no order).
-
-    Only the retailer's own catalogue (products with a current price for them) and their
-    own aliases and order history are used. The draft is reviewed by the user, then placed
-    with confirm_extraction like any cart.
-    """
+    """Text message -> draft (see app/modules/ai_orders/graph.py). Never creates an order."""
     retailer = orders_service.resolve_ordering_retailer(db, actor, data.retailer_id)
-    prices = pricing_repository.get_effective_prices(db, retailer.id, datetime.now(UTC))
-    rows = repository.get_catalogue(db, list(prices.keys()))
-    aliases = repository.get_aliases(db, retailer.id)
-    recent = repository.get_recent_product_ids(db, retailer.id)
-    db.commit()  # end the read-only transaction so no connection is held during the LLM call
+    return graph.run(db, actor, retailer, input_type=AiInputType.TEXT, text=data.message)
 
-    words_by_product: dict[uuid.UUID, list[str]] = {}
-    for alias in aliases:
-        words_by_product.setdefault(alias.product_id, []).append(alias.alias)
-    result = llm.extract_lines(
-        data.message,
-        [llm.CatalogueEntry(p.sku, p.name, p.brand, category, p.pack_size, p.order_unit,
-                            tuple(words_by_product.get(p.id, ()))) for p, category in rows],
-        [p.sku for p, _ in rows if p.id in recent],
-    )
-    catalogue = [matcher.CatalogueProduct(p.id, p.sku, p.name, p.brand, p.pack_size, p.order_unit)
-                 for p, _ in rows]
-    alias_map = {a.normalized_alias: a.product_id for a in aliases}
-    items = [matcher.match_line(line, catalogue, alias_map, recent) for line in result.lines]
-    return record_extraction(db, actor, RecordExtractionInput(
-        retailer_id=retailer.id,
-        original_message=data.message,
-        model_name=result.model,
-        raw_response=result.raw,
-        items=items,
-    ))
+
+IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+AUDIO_TYPES = {"audio/webm", "audio/ogg", "audio/mpeg", "audio/mp3", "audio/mp4", "audio/m4a", "audio/x-m4a",
+               "audio/wav", "audio/x-wav", "audio/aac", "video/webm"}
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
+
+
+def extract_from_media(db: Session, actor: User, *, kind: str, content: bytes, content_type: str | None,
+                       filename: str | None, retailer_id: uuid.UUID | None) -> AiExtraction:
+    """A photo of an order list (read by the vision model) or a voice note (transcribed
+    first, then read like a message) -> draft. Never creates an order."""
+    retailer = orders_service.resolve_ordering_retailer(db, actor, retailer_id)
+    content_type = (content_type or "").split(";")[0].strip().lower()
+    if kind == "image":
+        if content_type not in IMAGE_TYPES:
+            raise AppException("Send a JPEG, PNG or WebP photo", ErrorCode.VALIDATION_ERROR, 422)
+        if not content or len(content) > MAX_IMAGE_BYTES:
+            raise AppException("The photo must be at most 5 MB", ErrorCode.VALIDATION_ERROR, 422)
+        data_url = f"data:{content_type};base64,{base64.b64encode(content).decode()}"
+        return graph.run(db, actor, retailer, input_type=AiInputType.IMAGE, text="", image_data_url=data_url)
+    if kind == "voice":
+        if content_type not in AUDIO_TYPES:
+            raise AppException("Send the voice note as webm, ogg, mp3, m4a or wav", ErrorCode.VALIDATION_ERROR, 422)
+        if not content or len(content) > MAX_AUDIO_BYTES:
+            raise AppException("The voice note must be at most 10 MB", ErrorCode.VALIDATION_ERROR, 422)
+        db.commit()  # no transaction open during the transcription call
+        transcript = llm.transcribe(content, filename or "voice-note.webm", content_type)
+        return graph.run(db, actor, retailer, input_type=AiInputType.VOICE, text=transcript[:2000])
+    raise AppException("kind must be image or voice", ErrorCode.VALIDATION_ERROR, 422)
+
+
+def list_drafts(db: Session, actor: User, retailer_id: uuid.UUID | None = None, limit: int = 20) -> list[AiExtraction]:
+    """AI drafts not yet placed as an order (newest first). A draft is never an order: it
+    only becomes one when the user confirms it, and then the Order Desk accepts or rejects it."""
+    retailer = orders_service.resolve_ordering_retailer(db, actor, retailer_id)
+    drafts = repository.list_open_extractions(db, retailer.id, list(CONFIRMABLE_STATUSES), limit)
+    return [d for d in drafts if d.items]  # messages where nothing was recognised are not drafts
 
 
 def get_extraction(db: Session, actor: User, extraction_id: uuid.UUID) -> AiExtraction:
@@ -145,6 +157,13 @@ def confirm_extraction(
             ai_extraction_id=extraction.id,
         )
         extraction.extraction_status = ExtractionStatus.CONFIRMED
+        # Link each AI line to the order line it became: its product (after any Order Desk
+        # correction) is what the retailer meant, and future matching learns from it.
+        lines_by_product = {line.product_id: line for line in order.items}
+        for confirmed in data.items:
+            source = items_by_id.get(confirmed.extraction_item_id)
+            if source is not None and confirmed.product_id in lines_by_product:
+                source.order_item_id = lines_by_product[confirmed.product_id].id
 
         # Learn the retailer's wording when they chose a different product than the match,
         # so the same words match directly next time (retailer-specific only).

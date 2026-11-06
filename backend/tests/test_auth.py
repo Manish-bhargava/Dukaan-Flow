@@ -612,3 +612,23 @@ def test_admin_only_routes(protected, user_key, expected):
 ])
 def test_resource_ownership_through_the_token(protected, user_key, retailer, expected):
     assert protected(f"/retailers/{seed_id('retailer', retailer)}/credit", user_key) == expected
+
+
+def test_rate_limit_counter_without_expiry_never_blocks_forever(redis):
+    """A request counter that lost its expiry (TTL -1) is given one again, so the number is
+    limited only for one window instead of permanently."""
+    from app.modules.auth.auth_store import AuthStore, RateLimit
+
+    store = AuthStore(redis)
+    redis.r.set(f"otp_requests:{SHARMA_PHONE}", 5)  # at the limit, no expiry
+    status, retry_after = store.reserve_otp_request(SHARMA_PHONE, 60, 5, 900)
+    assert status == RateLimit.LIMITED and retry_after == 900
+    assert 0 < redis.r.ttl(f"otp_requests:{SHARMA_PHONE}") <= 900
+
+    redis.r.set(f"otp_requests:{GUPTA_PHONE}", 2)  # below the limit, no expiry
+    assert store.reserve_otp_request(GUPTA_PHONE, 60, 5, 900)[0] == RateLimit.OK
+    assert 0 < redis.r.ttl(f"otp_requests:{GUPTA_PHONE}") <= 900
+
+    redis.r.set(f"login_attempts:{DESK_PHONE}", 1)  # password attempts counter, no expiry
+    store.reserve_login_attempt(DESK_PHONE, 10, 900)
+    assert 0 < redis.r.ttl(f"login_attempts:{DESK_PHONE}") <= 900

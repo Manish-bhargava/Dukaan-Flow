@@ -23,6 +23,17 @@ class Category(Base):
     products: Mapped[list["Product"]] = relationship(back_populates="category")
 
 
+class Brand(Base):
+    """Brands; products reference them by name (renaming cascades to products)."""
+
+    __tablename__ = "brands"
+
+    id: Mapped[uuid.UUID] = uuid_pk_column()
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    created_at: Mapped[datetime] = created_at_column()
+
+
 class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
@@ -33,7 +44,7 @@ class Product(Base):
     id: Mapped[uuid.UUID] = uuid_pk_column()
     sku: Mapped[str] = mapped_column(String(50), unique=True)
     name: Mapped[str] = mapped_column(String(200))
-    brand: Mapped[str] = mapped_column(String(100))
+    brand: Mapped[str] = mapped_column(ForeignKey("brands.name", onupdate="CASCADE"), index=True)
     category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("categories.id"), index=True)
     pack_size: Mapped[str] = mapped_column(String(100))
     units_per_case: Mapped[Decimal] = mapped_column(Numeric(12, 3))

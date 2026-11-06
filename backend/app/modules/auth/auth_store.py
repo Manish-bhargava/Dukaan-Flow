@@ -26,7 +26,8 @@ from app.exceptions.base import AppException
 logger = logging.getLogger(__name__)
 
 # Rate limit for OTP requests: 60 s cooldown, then at most N requests per window.
-# Returns {status, retry_after_seconds}.
+# Returns {status, retry_after_seconds}. A counter without an expiry (TTL -1) is given one
+# again, so a number can never be blocked forever.
 _RESERVE_OTP_REQUEST = """
 local cooldown = redis.call('TTL', KEYS[1])
 if cooldown > 0 then
@@ -35,11 +36,14 @@ end
 local count = tonumber(redis.call('GET', KEYS[2]) or '0')
 if count >= tonumber(ARGV[2]) then
   local ttl = redis.call('TTL', KEYS[2])
-  if ttl < 1 then ttl = tonumber(ARGV[3]) end
+  if ttl < 1 then
+    ttl = tonumber(ARGV[3])
+    redis.call('EXPIRE', KEYS[2], ttl)
+  end
   return {'LIMITED', ttl}
 end
 count = redis.call('INCR', KEYS[2])
-if count == 1 then
+if redis.call('TTL', KEYS[2]) < 0 then
   redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
 end
 redis.call('SET', KEYS[1], '1', 'EX', tonumber(ARGV[1]))
@@ -95,7 +99,7 @@ return 1
 # all pass a check-then-increment. Returns {status, retry_after_seconds}.
 _RESERVE_LOGIN_ATTEMPT = """
 local count = redis.call('INCR', KEYS[1])
-if count == 1 then
+if redis.call('TTL', KEYS[1]) < 0 then
   redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
 end
 if count > tonumber(ARGV[1]) then

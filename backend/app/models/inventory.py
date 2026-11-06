@@ -48,5 +48,6 @@ class StockMovement(Base):
     movement_type: Mapped[str] = mapped_column(String(30))
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3))
     reference: Mapped[str | None] = mapped_column(String(200))
+    stock_after: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))  # stock once applied (before = after - quantity)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = created_at_column()
