@@ -21,7 +21,7 @@ built for a distributor in Jabalpur. See `PROJECT.md` and `docs/` for requiremen
 cd backend
 python3.13 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime + test tools (production images use requirements.txt)
 cp .env.example .env               # set DATABASE_URL
 alembic upgrade head               # create tables
 python -m seed.run_seed            # load demo data
@@ -63,3 +63,41 @@ Other scripts: `npm run lint` (oxlint), `npm run build` (type-check + production
 | `frontend/.env` | `VITE_API_BASE_URL` | Backend base URL including `/api/v1` |
 
 Never commit `.env` files; only the `.env.example` templates are tracked.
+
+## Production (Docker)
+
+Runs the production build in three containers: `db` (PostgreSQL), `api` (FastAPI; applies the migrations on
+start) and `web` (nginx with the React app; passes `/api/` to the API). Only Docker is needed.
+
+```bash
+cp backend/.env.production.example backend/.env.production   # fill in the keys (see below)
+docker compose up -d --build                                  # build and start
+docker compose ps                                             # api and web "healthy"
+docker compose run --rm api python -m app.cli create-admin --name "Owner Name" --phone 9876543210
+```
+
+Open <http://localhost:8080>, sign in on the **Staff** tab as that admin, then add staff, products and
+retailers in the Admin portal.
+
+**Demo data instead (for a demo server, not for real business data):** load the fictional demo shops,
+products, staff and 30 days of orders. Every staff account gets the password you pass:
+
+```bash
+docker compose run --rm api python -m seed.run_seed --staff-password 'choose-a-password'
+docker compose run --rm api python -m seed.bulk_demo --staff-password 'choose-a-password'
+```
+
+Demo logins (phone): admin `9000000001`, order desk `9000000002` (also `9000000008`, `9000000009`),
+salesmen `9000000003`–`9000000006`, all on the **Staff** tab with that password. Retailer `9000000103`
+(Jain Provision Store) signs in with an OTP emailed to `testemail4dukaanflow@gmail.com` (needs Brevo).
+
+Other commands: `docker compose logs -f api` (logs), `docker compose down` (stop; data stays in the
+`pgdata` volume), `docker compose down -v` (stop and delete the data).
+
+`backend/.env.production` needs a random `JWT_SECRET_KEY` (32+ characters), Upstash Redis
+(`UPSTASH_REDIS_REST_URL` / `_TOKEN`, used by every login), Brevo (`BREVO_API_KEY`, verified
+`BREVO_SENDER_EMAIL`, for retailer OTP email), optionally `OPENAI_API_KEY` (AI orders) and the Cloudinary keys.
+The API refuses to start with development secrets, `EMAIL_PROVIDER=mock` or `DEBUG=true`, and shows the
+reason in `docker compose logs api`. Health: `GET /api/v1/health` and `/api/v1/health/ready` (database);
+`/docs` is served in development only. On a public server, put HTTPS (a reverse proxy) in front of
+port 8080 and set `CORS_ORIGINS` to that address.
