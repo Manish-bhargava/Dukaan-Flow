@@ -434,6 +434,9 @@ Do not let retailers modify their own credit limit or outstanding balance.
 
 ## 6. Important Indexes
 
+Production indexes (migration `e46e5956c8f8`) for the frequent queries: `orders(created_at)` (today's orders, newest-first lists), `orders(created_by)` (a salesman's own orders), `orders(approved_at)` (Tally export, dispatch, reports by confirmation date), `orders(ai_extraction_id)` partial where not null, `retailer_prices(product_id)` (default price and price history), `order_events(created_at)` (desk activity per period).
+
+
 Create indexes on:
 
 - users.phone

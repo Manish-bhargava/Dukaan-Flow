@@ -23,8 +23,8 @@ def test_db_status_reports_connected(client):
 
 def test_seed_summary_counts(client):
     data = client.get("/api/v1/dev/seed-summary").json()["data"]
-    assert data["users"] == 6
-    assert data["users_by_role"] == {"ADMIN": 1, "ORDER_DESK": 1, "SALESMAN": 2, "RETAILER": 2}
+    assert data["users"] == 7
+    assert data["users_by_role"] == {"ADMIN": 1, "ORDER_DESK": 1, "SALESMAN": 2, "RETAILER": 3}
     assert (data["orders"], data["orders_by_status"], data["otp_verifications"]) == (0, {}, 0)
     assert (data["retailers"], data["products"], data["schemes"], data["inventory_records"]) == (
         5,

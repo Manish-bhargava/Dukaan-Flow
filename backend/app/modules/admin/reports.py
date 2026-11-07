@@ -25,6 +25,8 @@ from app.modules.order_desk.service import salesman_of
 from app.modules.settings.service import get_settings
 
 Report = tuple[list[str], list[list]]
+DEFAULT_DAYS = 30  # dated reports without dates: the last 30 days
+MAX_DAYS = 366
 ZERO = Decimal(0)
 SOURCE_NAMES = {"MANUAL": "Retailer app", "SALESMAN": "Salesman app", "AI": "AI capture"}
 
@@ -217,6 +219,14 @@ def run(db: Session, actor: User, name: str, from_date: date | None, to_date: da
     if name not in REPORTS:
         raise AppException(f"Unknown report '{name}'", ErrorCode.VALIDATION_ERROR, 422, {"reports": list(REPORTS)})
     title, fn, dated = REPORTS[name]
+    if dated:
+        # Reports read every order in the range: default to the last 30 days, at most a year.
+        today = datetime.now(IST).date()
+        to_date = to_date or today
+        from_date = from_date or to_date - timedelta(days=DEFAULT_DAYS - 1)
+        if (to_date - from_date).days >= MAX_DAYS:
+            raise AppException(f"Choose at most {MAX_DAYS} days for a report", ErrorCode.VALIDATION_ERROR, 422,
+                               {"max_days": MAX_DAYS})
     start, end = ist_range(from_date, to_date) if dated else (None, None)
     columns, rows = fn(db, start, end)
     return {"name": name, "title": title, "uses_dates": dated, "from_date": from_date if dated else None,

@@ -96,6 +96,8 @@ RETAILER_CITY = "Jabalpur"
 RETAILER_USERS = {
     "retailer_sharma": ("Ramesh Sharma", "9000000101", "sharma.kirana@example.com", "sharma"),
     "retailer_gupta": ("Mahesh Gupta", "9000000102", "gupta.general@example.com", "gupta"),
+    # Demo login with a real inbox, so the OTP email can be shown in a live demo.
+    "retailer_jain": ("Anil Jain", "9000000103", "testemail4dukaanflow@gmail.com", "jain"),
 }
 
 CATEGORIES = ["Biscuits", "Home Care", "Tea", "Noodles"]

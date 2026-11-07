@@ -51,3 +51,20 @@ def test_unexpected_error_is_a_json_500_with_cors_headers_and_no_traceback():
     assert response.json() == {"success": False, "message": "An unexpected error occurred",
                                "error_code": "INTERNAL_SERVER_ERROR", "details": {}}
     assert "secret internal detail" not in response.text and "Traceback" not in response.text
+
+
+def test_readiness_checks_the_database(client):
+    response = client.get("/api/v1/health/ready")
+    assert response.status_code == 200
+    assert response.json()["data"] == {"status": "ready", "database": "ok"}
+
+
+def test_api_docs_are_only_served_in_development():
+    from app.core.config import settings
+    from app.main import create_app
+
+    production = settings.model_copy(update={"ENVIRONMENT": "production"})
+    with TestClient(create_app(production)) as c:
+        assert c.get("/docs").status_code == 404 and c.get("/openapi.json").status_code == 404
+    with TestClient(create_app(settings.model_copy(update={"ENVIRONMENT": "development"}))) as c:
+        assert c.get("/openapi.json").status_code == 200

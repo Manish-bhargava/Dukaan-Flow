@@ -219,7 +219,10 @@ def test_bundle_shows_retailers_registered_login_mobile(as_user, tx):
     sharma = next(r for r in bundle["retailers"] if r["id"] == str(SHARMA))
     assert (sharma["phone"], sharma["registered_mobiles"]) == ("9000000101", ["6376169979"])
     jain = next(r for r in bundle["retailers"] if r["id"] == str(JAIN))
-    assert jain["registered_mobiles"] == []  # no login account
+    assert jain["registered_mobiles"] == ["9000000103"]
+    patel = next(r for r in data(as_user("salesman_deepak", "GET", "/salesman/sync-bundle"))["retailers"]
+                 if r["id"] == str(PATEL))
+    assert patel["registered_mobiles"] == []  # no login account
 
 
 def test_home_counts_come_from_the_server(as_user):

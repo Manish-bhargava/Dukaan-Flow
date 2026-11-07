@@ -257,10 +257,17 @@ def set_demo_staff_passwords(session: Session, password: str) -> int:
     return result.rowcount
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
     from app.database.connection import engine
     from app.database.session import SessionLocal
     from seed.demo_activity import run_demo_activity
+
+    parser = argparse.ArgumentParser(description="Load the demo data (idempotent).")
+    parser.add_argument("--staff-password", help="password for the demo staff without one (stored hashed); "
+                        "defaults to DEMO_STAFF_PASSWORD in development")
+    args = parser.parse_args(argv)
 
     with SessionLocal() as session:
         summary = run_seed(session)
@@ -271,12 +278,13 @@ def main() -> None:
 
     from app.core.config import settings
 
-    if settings.is_development and settings.DEMO_STAFF_PASSWORD:
+    password = args.staff_password or (settings.DEMO_STAFF_PASSWORD if settings.is_development else None)
+    if password:
         with SessionLocal() as session:
-            updated = set_demo_staff_passwords(session, settings.DEMO_STAFF_PASSWORD)
-        print(f"\ninternal demo users given DEMO_STAFF_PASSWORD: {updated} (existing passwords kept)")
+            updated = set_demo_staff_passwords(session, password)
+        print(f"\ninternal demo users given the staff password: {updated} (existing passwords kept)")
     else:
-        print("\nDEMO_STAFF_PASSWORD not set: internal demo users have no password yet")
+        print("\nno staff password given (--staff-password): internal demo users have no password yet")
 
     # Demo orders/AI activity in ONE transaction: the services' commits become savepoints,
     # so either all of it is created or none of it is.

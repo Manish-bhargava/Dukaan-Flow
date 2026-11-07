@@ -1,0 +1,6 @@
+# Development and tests: the runtime packages plus test tools.
+-r requirements.txt
+
+pytest==8.4.*
+fakeredis[lua]==2.40.*
+deepeval==3.*  # AI matching evaluation (tests/test_ai_matching_eval.py)

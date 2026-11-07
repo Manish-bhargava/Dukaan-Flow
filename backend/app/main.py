@@ -3,7 +3,10 @@ import logging
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from sqlalchemy import text
+
 from app.core.config import Settings, settings
+from app.core.dependencies import DbSession
 from app.exceptions.handlers import register_exception_handlers
 from app.middleware.errors import UnhandledErrorMiddleware
 from app.modules.auth.router import router as auth_router
@@ -23,6 +26,13 @@ def health_check() -> dict:
     return success_response("DukaanFlow API is running", {"status": "healthy"})
 
 
+def readiness_check(db: DbSession) -> dict:
+    """Readiness check for the host / load balancer: the database answers. If it does not,
+    the database handler returns 503 DATABASE_UNAVAILABLE."""
+    db.execute(text("SELECT 1"))
+    return success_response("DukaanFlow API is ready", {"status": "ready", "database": "ok"})
+
+
 def create_app(app_settings: Settings = settings) -> FastAPI:
     # App warnings/errors (e.g. the development mock OTP) go to the console with their level
     # and source. Root stays at WARNING so library request logs (httpx) are not printed.
@@ -30,7 +40,10 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     # Our own INFO lines (e.g. "Brevo accepted email … messageId=…") are shown too.
     for name in ("dukaanflow", "app"):
         logging.getLogger(name).setLevel(logging.INFO)
-    app = FastAPI(title=app_settings.APP_NAME, debug=app_settings.DEBUG)
+    # Interactive API docs only in development (not exposed on the production API).
+    docs = app_settings.is_development
+    app = FastAPI(title=app_settings.APP_NAME, debug=app_settings.DEBUG, docs_url="/docs" if docs else None,
+                  redoc_url="/redoc" if docs else None, openapi_url="/openapi.json" if docs else None)
 
     # Added first, so it runs inside CORS: unexpected errors still get CORS headers.
     app.add_middleware(UnhandledErrorMiddleware)
@@ -48,6 +61,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     # All versioned endpoints are mounted under /api/v1. Module routers are included here.
     api_router = APIRouter(prefix=app_settings.API_V1_PREFIX)
     api_router.add_api_route("/health", health_check, methods=["GET"], tags=["health"])
+    api_router.add_api_route("/health/ready", readiness_check, methods=["GET"], tags=["health"])
     api_router.include_router(auth_router)
     api_router.include_router(products_router)
     api_router.include_router(retailers_router)

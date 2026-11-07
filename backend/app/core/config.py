@@ -92,6 +92,8 @@ class Settings(BaseSettings):
             raise ValueError("EMAIL_PROVIDER must be 'mock' or 'brevo'")
         if not self.is_development and self.EMAIL_PROVIDER == "mock":
             raise ValueError("EMAIL_PROVIDER=mock is only allowed when ENVIRONMENT=development")
+        if not self.is_development and self.DEBUG:
+            raise ValueError("DEBUG must be false outside development")
         if self.EMAIL_PROVIDER == "brevo" and not (self.BREVO_API_KEY and self.BREVO_SENDER_EMAIL):
             raise ValueError("EMAIL_PROVIDER=brevo needs BREVO_API_KEY and BREVO_SENDER_EMAIL")
         return self

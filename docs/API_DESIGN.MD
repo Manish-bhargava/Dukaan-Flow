@@ -2,6 +2,8 @@
 
 ## 1. API Conventions
 
+Health: `GET /api/v1/health` (process up), `GET /api/v1/health/ready` (database reachable; 503 `DATABASE_UNAVAILABLE` if not). Interactive docs (`/docs`, `/openapi.json`) are served only when `ENVIRONMENT=development`.
+
 - Base URL: `/api/v1`
 - API format: REST
 - Request/response format: JSON
@@ -421,7 +423,7 @@ All under `/admin`, ADMIN only: the router requires the ADMIN role (checked agai
 | GET `/admin/sync` | Per-salesman sync status (from `POST /salesman/sync-status`), offline orders, conflicts (held offline orders), failed syncs (refused device orders) |
 | GET `/admin/audit` | `source` all/master/orders, `entity_type`, `action`, `actor_id`, `search`, `from_date`, `to_date`; master-data audit and order history merged, newest first |
 | GET/PUT `/admin/settings` | Business name/address/phone/GSTIN, `low_stock_cases`, `inactive_retailer_days`, `duplicate_window_hours`, `ai_low_confidence_percent` (used by the order desk warnings) |
-| GET `/admin/reports`, `/admin/reports/{name}`, `/admin/reports/{name}/csv` | sales-by-date/-retailer/-salesman/-product/-category, source-breakdown, confirmed-vs-rejected, top-retailers, top-products, salesman-performance (with `from_date`/`to_date`, IST confirmation dates), low-stock, credit-outstanding, inactive-retailers |
+| GET `/admin/reports`, `/admin/reports/{name}`, `/admin/reports/{name}/csv` | sales-by-date/-retailer/-salesman/-product/-category, source-breakdown, confirmed-vs-rejected, top-retailers, top-products, salesman-performance (with `from_date`/`to_date`, IST confirmation dates; default the last 30 days, at most 366 days), low-stock, credit-outstanding, inactive-retailers |
 
 Related changes: `POST /salesman/sync-status` (`{pending_orders, failed_orders, pending_visits, last_error}`, reported by the phone after each sync; `GET /salesman/sync-bundle` records `last_sync_at` and includes each retailer's `ordering_restricted_reason`). A salesman's device order the server refuses is logged as `SYNC_FAILED`. Orders for a retailer whose ordering is paused or who is inactive are refused with `ORDERING_RESTRICTED` (403) on every channel; `POST /orders/quote` and `GET /retailers/me` report `ordering_restricted_reason`. Products without a retailer-specific price use the default price.
 

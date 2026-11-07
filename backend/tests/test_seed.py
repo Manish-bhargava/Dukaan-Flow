@@ -15,7 +15,7 @@ from app.models import (
 from seed.run_seed import seed_id
 
 EXPECTED_TOTALS = {
-    "users": 6,
+    "users": 7,
     "retailers": 5,
     "categories": 4,
     "brands": 4,

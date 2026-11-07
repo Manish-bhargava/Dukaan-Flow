@@ -632,3 +632,40 @@ def test_rate_limit_counter_without_expiry_never_blocks_forever(redis):
     redis.r.set(f"login_attempts:{DESK_PHONE}", 1)  # password attempts counter, no expiry
     store.reserve_login_attempt(DESK_PHONE, 10, 900)
     assert 0 < redis.r.ttl(f"login_attempts:{DESK_PHONE}") <= 900
+
+
+def test_production_refuses_debug():
+    with pytest.raises(ValueError, match="DEBUG"):
+        Settings(_env_file=None, ENVIRONMENT="production", JWT_SECRET_KEY="x" * 40, EMAIL_PROVIDER="brevo",
+                 BREVO_API_KEY="k", BREVO_SENDER_EMAIL="a@b.c", DEBUG=True)
+
+
+def test_create_admin_command_makes_a_working_admin_login(monkeypatch, tx):
+    """The first admin on a fresh production database (no demo seeds)."""
+    from sqlalchemy import select
+
+    from app import cli
+    from app.core.security import verify_password
+
+    monkeypatch.setattr(cli, "SessionLocal", lambda: _NoClose(tx))
+    message = cli.create_admin("Owner Name", "9812345670", "Strong#Pass1", "Owner@Example.com")
+    assert "created" in message
+    user = tx.scalar(select(User).where(User.phone == "9812345670"))
+    assert user.role == "ADMIN" and user.email == "owner@example.com" and verify_password("Strong#Pass1", user.password_hash)
+    with pytest.raises(ValueError, match="already exists"):
+        cli.create_admin("Again", "9812345670", "Strong#Pass1", None)
+    with pytest.raises(ValueError, match="8 characters"):
+        cli.create_admin("Short", "9812345671", "short", None)
+
+
+class _NoClose:
+    """Lets the command use the test transaction (rolled back after the test)."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def __enter__(self):
+        return self.session
+
+    def __exit__(self, *exc):
+        return False

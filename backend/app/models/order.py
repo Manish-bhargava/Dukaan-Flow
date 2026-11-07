@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text, false
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text, false, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -37,6 +37,10 @@ class Order(Base):
         ),
         Index("ix_orders_retailer_id_created_at", "retailer_id", "created_at"),
         Index("ix_orders_status_created_at", "status", "created_at"),
+        Index("ix_orders_created_at", "created_at"),  # today's orders, newest-first lists
+        Index("ix_orders_created_by", "created_by"),  # salesman's own orders and stats
+        Index("ix_orders_approved_at", "approved_at"),  # Tally export, dispatch, reports by confirmation date
+        Index("ix_orders_ai_extraction_id", "ai_extraction_id", postgresql_where=text("ai_extraction_id IS NOT NULL")),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()
@@ -152,6 +156,7 @@ class OrderEvent(Base):
     __table_args__ = (
         CheckConstraint(in_values("action", OrderEventAction), name="action_valid"),
         Index("ix_order_events_order_id_created_at", "order_id", "created_at"),
+        Index("ix_order_events_created_at", "created_at"),  # desk activity per period
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()

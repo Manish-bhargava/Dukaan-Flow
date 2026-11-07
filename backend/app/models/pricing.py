@@ -27,6 +27,7 @@ class RetailerPrice(Base):
             "effective_to IS NULL OR effective_to > effective_from", name="effective_range"
         ),
         Index("ix_retailer_prices_retailer_id_product_id", "retailer_id", "product_id"),
+        Index("ix_retailer_prices_product_id", "product_id"),  # a product's default price and price history
     )
 
     id: Mapped[uuid.UUID] = uuid_pk_column()

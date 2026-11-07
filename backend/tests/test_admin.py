@@ -330,3 +330,13 @@ def test_new_retailer_sees_the_whole_catalogue_at_default_prices(as_user, tx, tx
     assert biscuit["price"]["dealer_price"] == "8.10"  # the sample dealer price
     quote = tx_client.post("/api/v1/orders/quote", json=cart((BS075, 10)), headers=headers).json()["data"]
     assert quote["lines"][0]["scheme"]["description"] == "Buy 10 get 1 free"
+
+
+def test_dated_reports_default_to_30_days_and_cap_the_range(as_user):
+    data = admin(as_user, "GET", "/reports/sales-by-date")
+    assert data["from_date"] and data["to_date"]
+    from datetime import date
+    assert (date.fromisoformat(data["to_date"]) - date.fromisoformat(data["from_date"])).days == 29
+    assert err(as_user(ADMIN, "GET", "/admin/reports/sales-by-date",
+                       params={"from_date": "2024-01-01", "to_date": "2026-01-01"})) == (422, "VALIDATION_ERROR")
+    assert admin(as_user, "GET", "/reports/low-stock")["from_date"] is None  # undated reports unchanged
