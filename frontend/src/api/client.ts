@@ -1,4 +1,7 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
+/** Backend URL: VITE_API_BASE_URL, else the local backend in development and the same
+ *  origin as the app in production builds (API served at /api/v1 behind the same domain). */
+export const API_BASE_URL: string =
+  import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://127.0.0.1:8000/api/v1' : `${window.location.origin}/api/v1`)
 
 /** Standard success envelope (docs/API_DESIGN.MD). */
 export interface ApiResponse<T> {
